@@ -74,8 +74,13 @@ public:
 
 private:
 #if defined(GPU)
+#if defined(CUDA)
+	static transform * create_cuda(const uint32_t b, const uint32_t n, const bool isBoinc, const size_t device, const size_t num_regs,
+								   const bool verbose);
+#else
 	static transform * create_ocl(const uint32_t b, const uint32_t n, const bool isBoinc, const size_t device, const size_t num_regs,
 								  const cl_platform_id boinc_platform_id, const cl_device_id boinc_device_id, const bool verbose);
+#endif
 #elif defined(__aarch64__)
 	static transform * create_neon(const uint32_t b, const uint32_t n, const size_t num_threads, const size_t num_regs, const bool checkError);
 	static size_t get_sve_size();
@@ -111,6 +116,17 @@ protected:
 
 public:
 #if defined(GPU)
+#if defined(CUDA)
+	static transform * create_gpu(const uint32_t b, const uint32_t n, const bool isBoinc, const size_t device, const size_t num_regs,
+								  const int gpu_device_num, const bool verbose)
+	{
+		// gpu_device_num: BOINC-assigned CUDA ordinal (>= 0), else use the -d device.
+		const size_t dev = (gpu_device_num >= 0) ? static_cast<size_t>(gpu_device_num) : device;
+		transform * const pTransform = transform::create_cuda(b, n, isBoinc, dev, num_regs, verbose);
+		if (pTransform == nullptr) throw std::runtime_error("CUDA device not found");
+		return pTransform;
+	}
+#else
 	static transform * create_gpu(const uint32_t b, const uint32_t n, const bool isBoinc, const size_t device, const size_t num_regs,
 								  const cl_platform_id boinc_platform_id, const cl_device_id boinc_device_id, const bool verbose)
 	{
@@ -118,6 +134,7 @@ public:
 		if (pTransform == nullptr) throw std::runtime_error("OpenCL device not found");
 		return pTransform;
 	}
+#endif
 #else
 	static transform * create_cpu(const uint32_t b, const uint32_t n, const size_t num_threads, const std::string & impl, const size_t num_regs,
 								  const bool checkError, std::string & ttype)

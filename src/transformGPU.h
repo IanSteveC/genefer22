@@ -11,10 +11,35 @@ Please give feedback to the authors if improvement is realized. It is distribute
 #include <cmath>
 #include <fstream>
 
+#if defined(CUDA)
+#include "cu.h"
+#else
 #include "ocl.h"
+#endif
 #include "transform.h"
 
+#if defined(CUDA)
+#include "cuda/kernel.h"
+#else
 #include "ocl/kernel.h"
+#endif
+
+// --- GPU backend handle aliases (CUDA / OpenCL) ---
+// One orchestration layer drives either backend; only these handle types and the
+// kernel-source seam differ. See cu.h / ocl.h for the matching device interface.
+#if defined(CUDA)
+typedef cuPlatform	gpu_platform;
+typedef cuDevice	gpu_device_base;
+typedef cu_mem		gpu_mem;
+typedef cu_kernel	gpu_kernel;
+#define CL_MEM_READ_WRITE	CU_MEM_READ_WRITE
+#define CL_MEM_READ_ONLY	CU_MEM_READ_ONLY
+#else
+typedef platform	gpu_platform;
+typedef device		gpu_device_base;
+typedef cl_mem		gpu_mem;
+typedef cl_kernel	gpu_kernel;
+#endif
 
 // #define USE_WI	1
 // #define	TUNE	1
@@ -29,10 +54,10 @@ Please give feedback to the authors if improvement is realized. It is distribute
 // #define CHECK_FUNC_3		1	// GFN-12&13&14: square256, square512, forward1024
 // #define CHECK_FUNC_4		1	// GFN-12&13&14: square1024, square2048, square4096
 
-typedef cl_uint		uint32;
-typedef cl_int		int32;
-typedef cl_ulong	uint64;
-typedef cl_long		int64;
+typedef uint32_t	uint32;
+typedef int32_t		int32;
+typedef uint64_t	uint64;
+typedef int64_t		int64;
 
 #define	P1S			(127 * (uint32(1) << 24) + 1)
 #define	Q1S			2164260865u		// p * q = 1 (mod 2^32)
@@ -208,7 +233,7 @@ public:
 	void forward##u##p_##v() { setTransformArgs(_forward##u##_##v, false); forward##u##_##v(); setTransformArgs(_forward##u##_##v);	}
 
 template<size_t RNS_SIZE, bool is32>
-class engines : public device
+class engines : public gpu_device_base
 {
 	using ZP1 = ZPT<is32 ? P1U : P1S, is32 ? Q1U : Q1S, is32 ? R1U : R1S, is32 ? H1U : H1S>;
 	using ZP2 = ZPT<is32 ? P2U : P2S, is32 ? Q2U : Q2S, is32 ? R2U : R2S, is32 ? H2U : H2S>;
@@ -220,28 +245,31 @@ private:
 	const bool _isBoinc;
 	const size_t _num_regs;
 	const int _lnormWGsize;
-	cl_mem _z = nullptr, _zp = nullptr, _w = nullptr, _c = nullptr;
+	gpu_mem _z = 0, _zp = 0, _w = 0, _c = 0;
 #if defined(TUNE)
-	cl_kernel _forward4 = nullptr, _backward4 = nullptr, _forward4_0 = nullptr, _backward4_0 = nullptr;
-	cl_kernel _square2x2 = nullptr, _square4 = nullptr, _square8 = nullptr;
-	cl_kernel _fwd4p = nullptr, _fwd8p = nullptr;
-	cl_kernel _mul2x2 = nullptr, _mul4 = nullptr, _mul8 = nullptr;
+	gpu_kernel _forward4 = nullptr, _backward4 = nullptr, _forward4_0 = nullptr, _backward4_0 = nullptr;
+	gpu_kernel _square2x2 = nullptr, _square4 = nullptr, _square8 = nullptr;
+	gpu_kernel _fwd4p = nullptr, _fwd8p = nullptr;
+	gpu_kernel _mul2x2 = nullptr, _mul4 = nullptr, _mul8 = nullptr;
 #endif
-	cl_kernel _forward64_0 = nullptr, _forward64_9 = nullptr, _forward64_11 = nullptr;
-	cl_kernel _backward64_0 = nullptr, _backward64_9 = nullptr, _backward64_11 = nullptr;
-	cl_kernel _forward256_0 = nullptr, _backward256_0 = nullptr, _forward1024_0 = nullptr, _backward1024_0 = nullptr;
+	gpu_kernel _forward64_0 = nullptr, _forward64_9 = nullptr, _forward64_11 = nullptr;
+	gpu_kernel _backward64_0 = nullptr, _backward64_9 = nullptr, _backward64_11 = nullptr;
+	gpu_kernel _forward256_0 = nullptr, _backward256_0 = nullptr, _forward1024_0 = nullptr, _backward1024_0 = nullptr;
 #if defined(TUNE)
-	cl_kernel _forward64 = nullptr, _forward256 = nullptr, _forward1024 = nullptr;
-	cl_kernel _backward64 = nullptr, _backward256 = nullptr, _backward1024 = nullptr;
+	gpu_kernel _forward64 = nullptr, _forward256 = nullptr, _forward1024 = nullptr;
+	gpu_kernel _backward64 = nullptr, _backward256 = nullptr, _backward1024 = nullptr;
 #endif
-	cl_kernel _square32 = nullptr, _square64 = nullptr, _square128 = nullptr, _square256 = nullptr;
-	cl_kernel _square512 = nullptr, _square1024 = nullptr, _square2048 = nullptr, _square4096 = nullptr;
-	cl_kernel _fwd32p = nullptr, _fwd64p = nullptr, _fwd128p = nullptr, _fwd256p = nullptr;
-	cl_kernel _fwd512p = nullptr, _fwd1024p = nullptr, _fwd2048p = nullptr, _fwd4096p = nullptr;
-	cl_kernel _mul32 = nullptr, _mul64 = nullptr, _mul128 = nullptr, _mul256 = nullptr;
-	cl_kernel _mul512 = nullptr, _mul1024 = nullptr, _mul2048 = nullptr, _mul4096 = nullptr;
-	cl_kernel _normalize1 = nullptr, _normalize2 = nullptr, _mulscalar = nullptr;
-	cl_kernel _set = nullptr, _copy = nullptr, _copyp = nullptr;
+	gpu_kernel _square32 = nullptr, _square64 = nullptr, _square128 = nullptr, _square256 = nullptr;
+	gpu_kernel _square512 = nullptr, _square1024 = nullptr, _square2048 = nullptr, _square4096 = nullptr;
+	gpu_kernel _fwd32p = nullptr, _fwd64p = nullptr, _fwd128p = nullptr, _fwd256p = nullptr;
+	gpu_kernel _fwd512p = nullptr, _fwd1024p = nullptr, _fwd2048p = nullptr, _fwd4096p = nullptr;
+	gpu_kernel _mul32 = nullptr, _mul64 = nullptr, _mul128 = nullptr, _mul256 = nullptr;
+	gpu_kernel _mul512 = nullptr, _mul1024 = nullptr, _mul2048 = nullptr, _mul4096 = nullptr;
+	gpu_kernel _normalize1 = nullptr, _normalize2 = nullptr, _mulscalar = nullptr;
+	gpu_kernel _set = nullptr, _copy = nullptr, _copyp = nullptr;
+#if defined(CUDA)
+	CUgraphExec _squareGraph[2] = { nullptr, nullptr };	// one captured squaring graph per dup value
+#endif
 #if defined(TUNE)
 	splitter * _pSplit = nullptr;
 	size_t _splitIndex = 0;
@@ -251,8 +279,8 @@ private:
 	static constexpr int ilog2_32(const uint32_t n) { return 31 - __builtin_clz(n); }
 
 public:
-	engines(const platform & platform, const size_t d, const int ln, const bool isBoinc, const size_t num_regs, const bool verbose)
-		: device(platform, d, verbose), _n(size_t(1) << ln), _ln(ln), _isBoinc(isBoinc), _num_regs(num_regs),
+	engines(const gpu_platform & platform, const size_t d, const int ln, const bool isBoinc, const size_t num_regs, const bool verbose)
+		: gpu_device_base(platform, d, verbose), _n(size_t(1) << ln), _ln(ln), _isBoinc(isBoinc), _num_regs(num_regs),
 		_lnormWGsize(std::min(std::max(5, ln / 2 - 3), ilog2_32(uint32_t(getMaxWorkGroupSize())))) {}
 	virtual ~engines() {}
 
@@ -293,46 +321,46 @@ public:
 ///////////////////////////////
 
 private:
-	cl_kernel createTransformKernel(const char * const kernelName, const bool isMultiplier = true)
+	gpu_kernel createTransformKernel(const char * const kernelName, const bool isMultiplier = true)
 	{
-		cl_kernel kernel = _createKernel(kernelName);
-		_setKernelArg(kernel, 0, sizeof(cl_mem), isMultiplier ? &_z : &_zp);
-		_setKernelArg(kernel, 1, sizeof(cl_mem), &_w);
+		gpu_kernel kernel = _createKernel(kernelName);
+		_setKernelArg(kernel, 0, sizeof(gpu_mem), isMultiplier ? &_z : &_zp);
+		_setKernelArg(kernel, 1, sizeof(gpu_mem), &_w);
 		return kernel;
 	}
 
-	cl_kernel createNormalizeKernel(const char * const kernelName, const uint32 b, const uint32 b_inv, const int32 b_s)
+	gpu_kernel createNormalizeKernel(const char * const kernelName, const uint32 b, const uint32 b_inv, const int32 b_s)
 	{
-		cl_kernel kernel = _createKernel(kernelName);
-		_setKernelArg(kernel, 0, sizeof(cl_mem), &_z);
-		_setKernelArg(kernel, 1, sizeof(cl_mem), &_c);
+		gpu_kernel kernel = _createKernel(kernelName);
+		_setKernelArg(kernel, 0, sizeof(gpu_mem), &_z);
+		_setKernelArg(kernel, 1, sizeof(gpu_mem), &_c);
 		_setKernelArg(kernel, 2, sizeof(uint32), &b);
 		_setKernelArg(kernel, 3, sizeof(uint32), &b_inv);
 		_setKernelArg(kernel, 4, sizeof(int32), &b_s);
 		return kernel;
 	}
 
-	cl_kernel createMulKernel(const char * const kernelName)
+	gpu_kernel createMulKernel(const char * const kernelName)
 	{
-		cl_kernel kernel = _createKernel(kernelName);
-		_setKernelArg(kernel, 0, sizeof(cl_mem), &_z);
-		_setKernelArg(kernel, 1, sizeof(cl_mem), &_zp);
-		_setKernelArg(kernel, 2, sizeof(cl_mem), &_w);
+		gpu_kernel kernel = _createKernel(kernelName);
+		_setKernelArg(kernel, 0, sizeof(gpu_mem), &_z);
+		_setKernelArg(kernel, 1, sizeof(gpu_mem), &_zp);
+		_setKernelArg(kernel, 2, sizeof(gpu_mem), &_w);
 		return kernel;
 	}
 
-	cl_kernel createSetCopyKernel(const char * const kernelName)
+	gpu_kernel createSetCopyKernel(const char * const kernelName)
 	{
-		cl_kernel kernel = _createKernel(kernelName);
-		_setKernelArg(kernel, 0, sizeof(cl_mem), &_z);
+		gpu_kernel kernel = _createKernel(kernelName);
+		_setKernelArg(kernel, 0, sizeof(gpu_mem), &_z);
 		return kernel;
 	}
 
-	cl_kernel createCopypKernel(const char * const kernelName)
+	gpu_kernel createCopypKernel(const char * const kernelName)
 	{
-		cl_kernel kernel = _createKernel(kernelName);
-		_setKernelArg(kernel, 0, sizeof(cl_mem), &_zp);
-		_setKernelArg(kernel, 1, sizeof(cl_mem), &_z);
+		gpu_kernel kernel = _createKernel(kernelName);
+		_setKernelArg(kernel, 0, sizeof(gpu_mem), &_zp);
+		_setKernelArg(kernel, 1, sizeof(gpu_mem), &_z);
 		return kernel;
 	}
 
@@ -455,6 +483,9 @@ public:
 		_releaseKernel(_normalize1); _releaseKernel(_normalize2); _releaseKernel(_mulscalar);
 
 		_releaseKernel(_set); _releaseKernel(_copy); _releaseKernel(_copyp);
+#if defined(CUDA)
+		destroyGraph(_squareGraph[0]); destroyGraph(_squareGraph[1]);	// before buffers/module are freed
+#endif
 	}
 
 ///////////////////////////////
@@ -466,13 +497,13 @@ public:
 ///////////////////////////////
 
 private:
-	void ek(cl_kernel & kernel, const size_t localWorkSize, const size_t step)
+	void ek(gpu_kernel & kernel, const size_t localWorkSize, const size_t step)
 	{
 		const size_t n_s = _n / step;
 		_executeKernel(kernel, RNS_SIZE * n_s, localWorkSize);
 	}
 
-	void ek_fb(cl_kernel & kernel, const int lm, const size_t localWorkSize, const size_t step)
+	void ek_fb(gpu_kernel & kernel, const int lm, const size_t localWorkSize, const size_t step)
 	{
 		const size_t n_s = _n / step;
 		const int32 ilm = static_cast<int32>(lm);
@@ -548,14 +579,14 @@ private:
 	DEFINE_MUL(2048);
 	DEFINE_MUL(4096);
 
-	void setTransformArgs(cl_kernel & kernel, const bool isMultiplier = true)
+	void setTransformArgs(gpu_kernel & kernel, const bool isMultiplier = true)
 	{
-		_setKernelArg(kernel, 0, sizeof(cl_mem), isMultiplier ? &_z : &_zp);
+		_setKernelArg(kernel, 0, sizeof(gpu_mem), isMultiplier ? &_z : &_zp);
 	}
 
 #if defined(TUNE)
 	DEFINE_FORWARDP(4);
-	DEFINE_FORWARDP0(4);
+	DEFINE_FORWARDPn(4, 0);	// was DEFINE_FORWARDP0(4) upstream — undefined macro (typo); forward4p_0()
 #endif
 	DEFINE_FORWARDPn(64, 0);
 	DEFINE_FORWARDPn(64, 9);
@@ -836,6 +867,23 @@ public:
 		_executeKernel(_normalize2, size >> _lnormWGsize);
 	}
 
+#if defined(CUDA)
+	// One squaring (square() + baseMod(dup)) via a captured CUDA graph: capture once per
+	// dup value (the only per-iteration-varying arg), then replay to skip per-launch overhead.
+	void squareDupCaptured(const bool dup)
+	{
+		const int gi = dup ? 1 : 0;
+		if (_squareGraph[gi] == nullptr)
+		{
+			beginCapture();
+			square();
+			baseMod(dup);
+			_squareGraph[gi] = endCapture();
+		}
+		launchGraph(_squareGraph[gi]);
+	}
+#endif
+
 #if defined(TUNE)
 private:
 	void squareTune(const size_t count, const size_t sIndex, const ZP * const Z)
@@ -866,12 +914,13 @@ public:
 		const size_t ns = pSplit->getSize();
 		if (ns > 1)
 		{
-			cl_ulong minT = cl_ulong(-1);
+			auto minT = getProfileTime();	// backend-neutral type (cl_ulong / double); set on first iteration
+			bool firstSplit = true;
 			for (size_t i = 0; i < ns; ++i)
 			{
 				resetProfiles();
 				squareTune(16, i, Z);
-				const cl_ulong t = getProfileTime();
+				const auto t = getProfileTime();
 
 #if defined(ocl_debug)
 				std::ostringstream ss; ss << "[" << i << "]";
@@ -879,8 +928,9 @@ public:
 				ss << ": " << t << std::endl;
 				pio::display(ss.str());
 #endif
-				if (t < minT)
+				if (firstSplit || (t < minT))
 				{
+					firstSplit = false;
 					minT = t;
 					_splitIndex = i;
 				}
@@ -940,10 +990,18 @@ private:
 	const size_t _num_regs;
 	ZP * const _z;
 	engines<RNS_SIZE, is32> * _pEngine = nullptr;
+#if defined(CUDA)
+	const bool _useGraph = (std::getenv("GENEFER_NOGRAPH") == nullptr);	// set GENEFER_NOGRAPH=1 to profile individual kernels
+#endif
 
 public:
+#if defined(CUDA)
+	transformGPUs(const uint32_t b, const uint32_t n, const bool isBoinc, const size_t device, const size_t num_regs,
+				 const bool verbose)
+#else
 	transformGPUs(const uint32_t b, const uint32_t n, const bool isBoinc, const size_t device, const size_t num_regs,
 				 const cl_platform_id boinc_platform_id, const cl_device_id boinc_device_id, const bool verbose)
+#endif
 		: transform(size_t(1) << n, n, b, (RNS_SIZE == 2) ? EKind::NTT2 : EKind::NTT3),
 #if defined(USE_WI)
 		_mem_size(RNS_SIZE * (size_t(1) << n) * (num_regs + 2) * sizeof(ZP) + (size_t(1) << n) / 4 * sizeof(int64)),
@@ -958,10 +1016,15 @@ public:
 
 		const size_t size = getSize();
 
+#if defined(CUDA)
+		const gpu_platform eng_platform;
+		_pEngine = new engines<RNS_SIZE, is32>(eng_platform, device, static_cast<int>(n), isBoinc, num_regs, verbose);
+#else
 		const bool is_boinc_platform = isBoinc && (boinc_device_id != 0) && (boinc_platform_id != 0);
 		const platform eng_platform = is_boinc_platform ? platform(boinc_platform_id, boinc_device_id) : platform();
 
 		_pEngine = new engines<RNS_SIZE, is32>(eng_platform, is_boinc_platform ? 0 : device, static_cast<int>(n), isBoinc, num_regs, verbose);
+#endif
 
 		std::ostringstream src;
 
@@ -1037,7 +1100,11 @@ public:
 
 		src << "#define MAX_WG_SZ\t" << _pEngine->getMaxWorkGroupSize() << std::endl << std::endl;
 
+#if defined(CUDA)
+		if (isBoinc || !_pEngine->readOpenCL("cuda/kernel.cu", "src/cuda/kernel.h", "src_cuda_kernel", src)) src << src_cuda_kernel;
+#else
 		if (isBoinc || !_pEngine->readOpenCL("ocl/kernel.cl", "src/ocl/kernel.h", "src_ocl_kernel", src)) src << src_ocl_kernel;
+#endif
 
 		_pEngine->loadProgram(src.str());
 		_pEngine->allocMemory();
@@ -1156,6 +1223,9 @@ public:
 
 	void squareDup(const bool dup) override
 	{
+#if defined(CUDA)
+		if (_useGraph) { _pEngine->squareDupCaptured(dup); return; }
+#endif
 		_pEngine->square();
 		_pEngine->baseMod(dup);
 	}

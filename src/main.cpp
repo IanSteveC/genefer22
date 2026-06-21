@@ -24,7 +24,11 @@ Please give feedback to the authors if improvement is realized. It is distribute
 #endif
 
 #if defined(GPU)
+#if defined(CUDA)
+#include "cu.h"
+#else
 #include "ocl.h"
+#endif
 #endif
 #include "genefer.h"
 
@@ -194,8 +198,12 @@ public:
 		pio::getInstance().setBoinc(bBoinc);
 
 #if defined(GPU)
+#if defined(CUDA)
+		int boinc_device_num = -1;
+#else
 		cl_platform_id boinc_platform_id = 0;
 		cl_device_id boinc_device_id = 0;
+#endif
 #endif
 		if (bBoinc)
 		{
@@ -356,6 +364,14 @@ public:
 		}
 
 #if defined(BOINC) && defined(GPU)
+#if defined(CUDA)
+		if (bBoinc && !boinc_is_standalone() && !ext_device)
+		{
+			APP_INIT_DATA aid;
+			boinc_get_init_data(aid);
+			boinc_device_num = aid.gpu_device_num;
+		}
+#else
 		if (bBoinc && !boinc_is_standalone() && !ext_device)
 		{
 			const int err = boinc_get_opencl_ids(argc, argv, 0, &boinc_device_id, &boinc_platform_id);
@@ -368,11 +384,16 @@ public:
 			}
 		}
 #endif
+#endif
 
 		genefer & g = genefer::getInstance();
 		g.setBoinc(bBoinc);
 #if defined(GPU)
+#if defined(CUDA)
+		g.setBoincParam(boinc_device_num);
+#else
 		g.setBoincParam(boinc_platform_id, boinc_device_id);
+#endif
 #endif
 		g.setFilename(mainFilename);
 
@@ -464,8 +485,13 @@ public:
 
 			pio::print(usage());
 #if defined(GPU)
+#if defined(CUDA)
+			cuPlatform pfm;
+			if (pfm.displayDevices() == 0) throw std::runtime_error("No CUDA device");
+#else
 			platform pfm;
 			if (pfm.displayDevices() == 0) throw std::runtime_error("No OpenCL device");
+#endif
 #else
 			g.displaySupportedImplementations();
 #endif

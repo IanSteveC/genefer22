@@ -25,7 +25,11 @@ Please give feedback to the authors if improvement is realized. It is distribute
 #include "file.h"
 #include "timer.h"
 #if defined(GPU)
+#if defined(CUDA)
+#include "cu.h"
+#else
 #include "ocl.h"
+#endif
 #endif
 #include "transform.h"
 #include "arith.h"
@@ -55,8 +59,12 @@ private:
 	std::atomic_bool _quit = false;
 	bool _isBoinc = false;
 #if defined(GPU)
+#if defined(CUDA)
+	int _boinc_device_num = -1;
+#else
 	cl_platform_id _boinc_platform_id = 0;
 	cl_device_id _boinc_device_id = 0;
+#endif
 #endif
 	transform * _transform = nullptr;
 	gint * _gi = nullptr;
@@ -82,11 +90,15 @@ public:
 
 	void setBoinc(const bool isBoinc) { _isBoinc = isBoinc; }
 #if defined(GPU)
+#if defined(CUDA)
+	void setBoincParam(const int device_num) { _boinc_device_num = device_num; }
+#else
 	void setBoincParam(const cl_platform_id platform_id, const cl_device_id device_id)
 	{
 		_boinc_platform_id = platform_id;
 		_boinc_device_id = device_id;
 	}
+#endif
 #endif
 
 	void setFilename(const std::string & mainFilename) { _mainFilename = mainFilename; }
@@ -97,7 +109,11 @@ private:
 							const bool verbose = true, const bool full = true)
 	{
 		deleteTransform();
+#if defined(CUDA)
+		_transform = transform::create_gpu(b, n, _isBoinc, device, num_regs, _boinc_device_num, verbose);
+#else
 		_transform = transform::create_gpu(b, n, _isBoinc, device, num_regs, _boinc_platform_id, _boinc_device_id, verbose);
+#endif
 		if (verbose)
 		{
 			std::ostringstream ss;

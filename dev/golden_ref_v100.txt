@@ -1,0 +1,10 @@
+# genefer golden reference residues — OpenCL geneferg on Tesla V100 (device 1), -q quick test
+# format: b n -> res64 old64   (verdict: all composite)
+# branch column = expected transformGPUs<RNS_SZ,is32> instantiation (to confirm in Phase 2)
+1000000    12 -> 6B30BF7EDE3EC2D5 4FE5E0E12A468358   # <2,false>
+1000000    13 -> 72B504FAB033A9FE A92CA4C14E3D35C7   # <2,false>
+1000000    14 -> 0791DA41DBD05687 6EB2634C30FCEF18   # <2,false>
+30000000   12 -> 50DA995C35DC1272 804A711410C54612   # <2,true>
+999999000  12 -> DA3E472DC5362196 9D03D43567958566   # <3,false>
+1500000000 12 -> B6425FC016F0285F AF37AFFD930972BE   # <3,true>
+1999999998 12 -> CCAB2A65CDE3EF07 4D71280FF2CBB36A   # <3,true>
