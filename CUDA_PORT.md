@@ -45,11 +45,22 @@ OpenCL build needs no CUDA installed:
 
 ```sh
 cd genefer
-make -f makefile_linux_x64 cuda            # builds ../bin/genefercu
-# (BOINC off for local dev:)  make -f makefile_linux_x64 BOINC= cuda
+make -f makefile_linux_x64 BOINC= cuda     # local dev, no BOINC -> ../bin/genefercu
 ```
 
 `genefercu -q -b 1000000 -n 12 -d 0` runs a quick PRP test on CUDA device 0.
+
+**With BOINC** (verified against BOINC 8.3.0; runs bit-exact standalone). The CUDA app
+selects its GPU via `aid.gpu_device_num` (not `boinc_get_opencl_ids`), so `libboinc_opencl.a`
+is *not* linked:
+
+```sh
+make -f makefile_linux_x64 cuda BOINC_DIR=/path/to/boinc
+```
+
+The default `BOINC_DIR` is `../boinc` relative to the repo root — override it if BOINC lives
+elsewhere. Remaining for full BOINC deployment: run-test under a live BOINC client (GPU
+assignment) and the server-side app version / plan class (PrimeGrid project config, not app code).
 
 ## Design
 
@@ -85,9 +96,13 @@ make -f makefile_linux_x64 cuda            # builds ../bin/genefercu
 
 ## Status / next steps
 
-- Done: bit-exact CUDA backend, dual build, CUDA Graphs + alignment (faster than OpenCL).
-- Not yet ported: the `TUNE` autotuner, full BOINC CUDA device wiring (a minimal
-  `aid.gpu_device_num` path exists), Windows/macOS makefiles (CUDA has no macOS).
+- Done: bit-exact CUDA backend, dual build, CUDA Graphs + alignment (faster than OpenCL),
+  per-GPU `TUNE` autotuner (builds + bit-exact), BOINC build (verified against BOINC 8.3.0).
+- Remaining: run-test under a live BOINC client (GPU assignment) + server-side app version;
+  Windows/macOS makefiles (CUDA has no macOS).
+- Investigated and declined (not worth the risk on this algorithm): Shoup modmul (~1 SASS
+  slot), normalize→backward fusion (blocked — backward writes strided FFT output, the base-b
+  carry needs contiguous order), on-the-fly twiddles (complicated by bit-reversed root storage).
 - Further optimisation ideas: warp-shuffle butterflies, per-kernel occupancy tuning.
 
 ## Platform note
