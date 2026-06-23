@@ -1,0 +1,40 @@
+.visible .entry probe_narrow(
+	.param .u64 .ptr .align 1 probe_narrow_param_0,
+	.param .u64 .ptr .align 1 probe_narrow_param_1,
+	.param .u64 .ptr .align 1 probe_narrow_param_2,
+	.param .align 8 .b8 probe_narrow_param_3[8]
+)
+{
+	.reg .b32 	%r<17>;
+	.reg .b64 	%rd<12>;
+
+	ld.param.u64 	%rd1, [probe_narrow_param_0];
+	ld.param.u64 	%rd2, [probe_narrow_param_1];
+	ld.param.u64 	%rd3, [probe_narrow_param_2];
+	ld.param.v2.u32 	{%r1, %r2}, [probe_narrow_param_3];
+	cvta.to.global.u64 	%rd4, %rd1;
+	cvta.to.global.u64 	%rd5, %rd3;
+	cvta.to.global.u64 	%rd6, %rd2;
+	mov.u32 	%r3, %ctaid.x;
+	mov.u32 	%r4, %ntid.x;
+	mov.u32 	%r5, %tid.x;
+	mad.lo.s32 	%r6, %r3, %r4, %r5;
+	mul.wide.s32 	%rd7, %r6, 4;
+	add.s64 	%rd8, %rd6, %rd7;
+	ld.global.u32 	%r7, [%rd8];
+	add.s64 	%rd9, %rd5, %rd7;
+	ld.global.u32 	%r8, [%rd9];
+	mul.wide.u32 	%rd10, %r8, %r7;
+	cvt.u32.u64 	%r9, %rd10;
+	{ .reg .b32 tmp; mov.b64 {tmp, %r10}, %rd10; }
+	mul.lo.s32 	%r11, %r2, %r9;
+	mul.hi.u32 	%r12, %r11, %r1;
+	sub.s32 	%r13, %r10, %r12;
+	shr.s32 	%r14, %r13, 31;
+	and.b32  	%r15, %r14, %r1;
+	add.s32 	%r16, %r15, %r13;
+	add.s64 	%rd11, %rd4, %rd7;
+	st.global.u32 	[%rd11], %r16;
+	ret;
+
+}

@@ -27,6 +27,8 @@ Please give feedback to the authors if improvement is realized. It is distribute
 #if defined(GPU)
 #if defined(CUDA)
 #include "cu.h"
+#elif defined(HIP)
+#include "hip.h"
 #else
 #include "ocl.h"
 #endif
@@ -59,7 +61,7 @@ private:
 	std::atomic_bool _quit = false;
 	bool _isBoinc = false;
 #if defined(GPU)
-#if defined(CUDA)
+#if defined(CUDA) || defined(HIP)
 	int _boinc_device_num = -1;
 #else
 	cl_platform_id _boinc_platform_id = 0;
@@ -90,7 +92,7 @@ public:
 
 	void setBoinc(const bool isBoinc) { _isBoinc = isBoinc; }
 #if defined(GPU)
-#if defined(CUDA)
+#if defined(CUDA) || defined(HIP)
 	void setBoincParam(const int device_num) { _boinc_device_num = device_num; }
 #else
 	void setBoincParam(const cl_platform_id platform_id, const cl_device_id device_id)
@@ -109,7 +111,7 @@ private:
 							const bool verbose = true, const bool full = true)
 	{
 		deleteTransform();
-#if defined(CUDA)
+#if defined(CUDA) || defined(HIP)
 		_transform = transform::create_gpu(b, n, _isBoinc, device, num_regs, _boinc_device_num, verbose);
 #else
 		_transform = transform::create_gpu(b, n, _isBoinc, device, num_regs, _boinc_platform_id, _boinc_device_id, verbose);

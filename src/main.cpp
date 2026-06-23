@@ -26,6 +26,8 @@ Please give feedback to the authors if improvement is realized. It is distribute
 #if defined(GPU)
 #if defined(CUDA)
 #include "cu.h"
+#elif defined(HIP)
+#include "hip.h"
 #else
 #include "ocl.h"
 #endif
@@ -198,7 +200,7 @@ public:
 		pio::getInstance().setBoinc(bBoinc);
 
 #if defined(GPU)
-#if defined(CUDA)
+#if defined(CUDA) || defined(HIP)
 		int boinc_device_num = -1;
 #else
 		cl_platform_id boinc_platform_id = 0;
@@ -364,7 +366,7 @@ public:
 		}
 
 #if defined(BOINC) && defined(GPU)
-#if defined(CUDA)
+#if defined(CUDA) || defined(HIP)
 		if (bBoinc && !boinc_is_standalone() && !ext_device)
 		{
 			APP_INIT_DATA aid;
@@ -389,7 +391,7 @@ public:
 		genefer & g = genefer::getInstance();
 		g.setBoinc(bBoinc);
 #if defined(GPU)
-#if defined(CUDA)
+#if defined(CUDA) || defined(HIP)
 		g.setBoincParam(boinc_device_num);
 #else
 		g.setBoincParam(boinc_platform_id, boinc_device_id);
@@ -488,6 +490,9 @@ public:
 #if defined(CUDA)
 			cuPlatform pfm;
 			if (pfm.displayDevices() == 0) throw std::runtime_error("No CUDA device");
+#elif defined(HIP)
+			hipPlatform pfm;
+			if (pfm.displayDevices() == 0) throw std::runtime_error("No HIP device");
 #else
 			platform pfm;
 			if (pfm.displayDevices() == 0) throw std::runtime_error("No OpenCL device");

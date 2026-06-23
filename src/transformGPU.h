@@ -13,27 +13,42 @@ Please give feedback to the authors if improvement is realized. It is distribute
 
 #if defined(CUDA)
 #include "cu.h"
+#elif defined(HIP)
+#include "hip.h"
 #else
 #include "ocl.h"
 #endif
 #include "transform.h"
 
-#if defined(CUDA)
-#include "cuda/kernel.h"
+#if defined(CUDA) || defined(HIP)
+#include "cuda/kernel.h"	// HIP shares the CUDA kernel source (same language; PTX guarded off under __HIP__)
 #else
 #include "ocl/kernel.h"
 #endif
 
-// --- GPU backend handle aliases (CUDA / OpenCL) ---
-// One orchestration layer drives either backend; only these handle types and the
-// kernel-source seam differ. See cu.h / ocl.h for the matching device interface.
+#if defined(CUDA) && defined(GENEFER_EMBED_FATBINS)
+#include "cuda/fatbins.h"	// auto-generated: per-(n,RNS,is32) fatbins embedded into the binary (no NVRTC)
+#endif
+
+// --- GPU backend handle aliases (CUDA / HIP / OpenCL) ---
+// One orchestration layer drives any backend; only these handle types and the
+// kernel-source seam differ. See cu.h / hip.h / ocl.h for the matching device interface.
 #if defined(CUDA)
 typedef cuPlatform	gpu_platform;
 typedef cuDevice	gpu_device_base;
 typedef cu_mem		gpu_mem;
 typedef cu_kernel	gpu_kernel;
+typedef CUgraphExec	gpu_graphexec;
 #define CL_MEM_READ_WRITE	CU_MEM_READ_WRITE
 #define CL_MEM_READ_ONLY	CU_MEM_READ_ONLY
+#elif defined(HIP)
+typedef hipPlatform		gpu_platform;
+typedef hipDevice		gpu_device_base;
+typedef hip_mem			gpu_mem;
+typedef hip_kernel		gpu_kernel;
+typedef hipGraphExec_t	gpu_graphexec;
+#define CL_MEM_READ_WRITE	HIP_MEM_READ_WRITE
+#define CL_MEM_READ_ONLY	HIP_MEM_READ_ONLY
 #else
 typedef platform	gpu_platform;
 typedef device		gpu_device_base;
@@ -267,8 +282,8 @@ private:
 	gpu_kernel _mul512 = nullptr, _mul1024 = nullptr, _mul2048 = nullptr, _mul4096 = nullptr;
 	gpu_kernel _normalize1 = nullptr, _normalize2 = nullptr, _mulscalar = nullptr;
 	gpu_kernel _set = nullptr, _copy = nullptr, _copyp = nullptr;
-#if defined(CUDA)
-	CUgraphExec _squareGraph[2] = { nullptr, nullptr };	// one captured squaring graph per dup value
+#if defined(CUDA) || defined(HIP)
+	gpu_graphexec _squareGraph[2] = { nullptr, nullptr };	// one captured squaring graph per dup value
 #endif
 #if defined(TUNE)
 	splitter * _pSplit = nullptr;
@@ -483,7 +498,7 @@ public:
 		_releaseKernel(_normalize1); _releaseKernel(_normalize2); _releaseKernel(_mulscalar);
 
 		_releaseKernel(_set); _releaseKernel(_copy); _releaseKernel(_copyp);
-#if defined(CUDA)
+#if defined(CUDA) || defined(HIP)
 		destroyGraph(_squareGraph[0]); destroyGraph(_squareGraph[1]);	// before buffers/module are freed
 #endif
 	}
@@ -867,7 +882,7 @@ public:
 		_executeKernel(_normalize2, size >> _lnormWGsize);
 	}
 
-#if defined(CUDA)
+#if defined(CUDA) || defined(HIP)
 	// One squaring (square() + baseMod(dup)) via a captured CUDA graph: capture once per
 	// dup value (the only per-iteration-varying arg), then replay to skip per-launch overhead.
 	void squareDupCaptured(const bool dup)
@@ -990,12 +1005,12 @@ private:
 	const size_t _num_regs;
 	ZP * const _z;
 	engines<RNS_SIZE, is32> * _pEngine = nullptr;
-#if defined(CUDA)
+#if defined(CUDA) || defined(HIP)
 	const bool _useGraph = (std::getenv("GENEFER_NOGRAPH") == nullptr);	// set GENEFER_NOGRAPH=1 to profile individual kernels
 #endif
 
 public:
-#if defined(CUDA)
+#if defined(CUDA) || defined(HIP)
 	transformGPUs(const uint32_t b, const uint32_t n, const bool isBoinc, const size_t device, const size_t num_regs,
 				 const bool verbose)
 #else
@@ -1016,7 +1031,7 @@ public:
 
 		const size_t size = getSize();
 
-#if defined(CUDA)
+#if defined(CUDA) || defined(HIP)
 		const gpu_platform eng_platform;
 		_pEngine = new engines<RNS_SIZE, is32>(eng_platform, device, static_cast<int>(n), isBoinc, num_regs, verbose);
 #else
@@ -1100,13 +1115,27 @@ public:
 
 		src << "#define MAX_WG_SZ\t" << _pEngine->getMaxWorkGroupSize() << std::endl << std::endl;
 
-#if defined(CUDA)
+#if defined(CUDA) || defined(HIP)
 		if (isBoinc || !_pEngine->readOpenCL("cuda/kernel.cu", "src/cuda/kernel.h", "src_cuda_kernel", src)) src << src_cuda_kernel;
 #else
 		if (isBoinc || !_pEngine->readOpenCL("ocl/kernel.cl", "src/ocl/kernel.h", "src_ocl_kernel", src)) src << src_ocl_kernel;
 #endif
 
+		// Dump the specialized kernel source so it can be compiled offline into a fatbin (AOT path).
+		// GENEFER_DUMP_EXIT lets a build-time generator emit a config's source and stop (no NVRTC/alloc).
+		if (const char * df = std::getenv("GENEFER_DUMP_SRC")) { std::ofstream sf(df); sf << src.str(); if (std::getenv("GENEFER_DUMP_EXIT")) std::exit(0); }
+
+#if defined(CUDA)
+		// AOT: load the fatbin for this (n, RNS, is32) config that build_fatbins.sh baked into this binary;
+		// cu.h falls back to NVRTC if this config isn't embedded (e.g. an NVRTC-only build).
+		const void * fbdata = nullptr; size_t fbsize = 0;
+#if defined(GENEFER_EMBED_FATBINS)
+		genefer_get_fatbin(int(n), int(RNS_SIZE), is32 ? 1 : 0, &fbdata, &fbsize);
+#endif
+		_pEngine->loadProgram(src.str(), fbdata, fbsize);
+#else
 		_pEngine->loadProgram(src.str());
+#endif
 		_pEngine->allocMemory();
 		_pEngine->createKernels(b);
 
@@ -1223,7 +1252,7 @@ public:
 
 	void squareDup(const bool dup) override
 	{
-#if defined(CUDA)
+#if defined(CUDA) || defined(HIP)
 		if (_useGraph) { _pEngine->squareDupCaptured(dup); return; }
 #endif
 		_pEngine->square();

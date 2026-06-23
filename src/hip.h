@@ -1,3 +1,4 @@
+#include "hip/hip_runtime.h"
 /*
 Copyright 2022, Yves Gallot
 
@@ -17,9 +18,9 @@ Design notes (see CUDA port plan):
    + clBuildProgram. The per-FFT-size `#define` block is prepended to the source
    string exactly as in the OpenCL path.
  - OpenCL binds kernel args once and updates them individually; CUDA's
-   cuLaunchKernel needs the full argument array every launch. We therefore cache
-   args per kernel (cu_kernel holds the arg blobs) and assemble the void* array
-   at launch time. Buffer args are CUdeviceptr (8 bytes), not cl_mem.
+   hipModuleLaunchKernel needs the full argument array every launch. We therefore cache
+   args per kernel (hip_kernel holds the arg blobs) and assemble the void* array
+   at launch time. Buffer args are hipDeviceptr_t (8 bytes), not cl_mem.
  - OpenCL global_work_size is TOTAL threads; CUDA needs grid + block separately.
    _executeKernel converts: block = localWorkSize (or 256 when 0), grid =
    global / block, asserting exact divisibility (OpenCL required it too).
@@ -27,8 +28,8 @@ Design notes (see CUDA port plan):
 
 #pragma once
 
-#include <cuda.h>
-#include <nvrtc.h>
+#include <hip/hip_runtime.h>
+#include <hip/hiprtc.h>
 
 #include <cstdint>
 #include <cstring>
@@ -95,44 +96,44 @@ public:
 	uint32_t getPart(const size_t i, const size_t j) const { return part[i].p[j]; }
 };
 
-// #define cu_debug		1
+// #define hip_debug		1
 
 // ---------------------------------------------------------------------------
 // Handle types (CUDA counterparts of cl_mem / cl_kernel).
-// cu_mem is a device pointer. cu_kernel is a heap object holding the CUfunction
+// hip_mem is a device pointer. hip_kernel is a heap object holding the hipFunction_t
 // plus the cached argument blobs (so _setKernelArg can stay value-semantically
-// identical to the OpenCL version while feeding cuLaunchKernel's arg array).
+// identical to the OpenCL version while feeding hipModuleLaunchKernel's arg array).
 // ---------------------------------------------------------------------------
 
-enum cu_mem_flags { CU_MEM_READ_WRITE = 0, CU_MEM_READ_ONLY = 1 };	// flags are advisory only on CUDA
+enum hip_mem_flags { HIP_MEM_READ_WRITE = 0, HIP_MEM_READ_ONLY = 1 };	// flags are advisory only on CUDA
 
-typedef CUdeviceptr cu_mem;
+typedef hipDeviceptr_t hip_mem;
 
-struct cu_kernel_t
+struct hip_kernel_t
 {
 	static const size_t max_args = 16;
-	static const size_t arg_blob = 16;	// bytes per arg slot (fits CUdeviceptr and any scalar used)
+	static const size_t arg_blob = 16;	// bytes per arg slot (fits hipDeviceptr_t and any scalar used)
 
-	CUfunction function = nullptr;
+	hipFunction_t function = nullptr;
 	std::string name;
 	std::array<std::array<uint8_t, arg_blob>, max_args> argData{};
 	std::array<size_t, max_args> argSize{};	// 0 => slot unset
 	size_t argCount = 0;					// highest set index + 1
 };
 
-typedef cu_kernel_t * cu_kernel;
+typedef hip_kernel_t * hip_kernel;
 
 // ---------------------------------------------------------------------------
 
-class cuObject
+class hipObject
 {
 protected:
-	static void cuFatal(const CUresult res, const char * const ext = nullptr)
+	static void hipFatal(const hipError_t res, const char * const ext = nullptr)
 	{
-		if (res != CUDA_SUCCESS)
+		if (res != hipSuccess)
 		{
-			const char * name = nullptr; cuGetErrorName(res, &name);
-			const char * str = nullptr; cuGetErrorString(res, &str);
+			const char * name = nullptr; hipDrvGetErrorName(res, &name);
+			const char * str = nullptr; hipDrvGetErrorString(res, &str);
 			std::ostringstream ss; ss << "cuda error: " << (name ? name : "?");
 			if (str != nullptr) ss << " - " << str;
 			if (ext != nullptr) ss << " (" << ext << ")";
@@ -140,11 +141,11 @@ protected:
 		}
 	}
 
-	static void nvrtcFatal(const nvrtcResult res, const char * const ext = nullptr)
+	static void hiprtcFatal(const hiprtcResult res, const char * const ext = nullptr)
 	{
-		if (res != NVRTC_SUCCESS)
+		if (res != HIPRTC_SUCCESS)
 		{
-			std::ostringstream ss; ss << "nvrtc error: " << nvrtcGetErrorString(res);
+			std::ostringstream ss; ss << "nvrtc error: " << hiprtcGetErrorString(res);
 			if (ext != nullptr) ss << " (" << ext << ")";
 			throw std::runtime_error(ss.str());
 		}
@@ -153,34 +154,32 @@ protected:
 
 // platform: enumerate CUDA devices. Counterpart of ocl.h::platform.
 // Note: there is no platform layer in CUDA; a "device" is just an ordinal.
-class cuPlatform : cuObject
+class hipPlatform : hipObject
 {
 private:
 	struct deviceDesc
 	{
-		CUdevice device;
+		hipDevice_t device;
 		std::string name;
 	};
 	std::vector<deviceDesc> _devices;
 
 public:
-	cuPlatform()
+	hipPlatform()
 	{
-		cuFatal(cuInit(0));
-		int count = 0; cuFatal(cuDeviceGetCount(&count));
+		hipFatal(hipInit(0));
+		int count = 0; hipFatal(hipGetDeviceCount(&count));
 		for (int i = 0; i < count; ++i)
 		{
-			CUdevice dev; cuFatal(cuDeviceGet(&dev, i));
-			char name[256]; cuFatal(cuDeviceGetName(name, sizeof(name), dev));
-			int major = 0, minor = 0;
-			cuFatal(cuDeviceGetAttribute(&major, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, dev));
-			cuFatal(cuDeviceGetAttribute(&minor, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, dev));
-			std::ostringstream ss; ss << "device '" << name << "', vendor 'NVIDIA Corporation', sm_" << major << minor;
+			hipDevice_t dev; hipFatal(hipDeviceGet(&dev, i));
+			char name[256]; hipFatal(hipDeviceGetName(name, sizeof(name), dev));
+			hipDeviceProp_t prop; hipFatal(hipGetDeviceProperties(&prop, dev));
+			std::ostringstream ss; ss << "device '" << name << "', vendor 'AMD', " << prop.gcnArchName;
 			_devices.push_back({ dev, ss.str() });
 		}
 	}
 
-	virtual ~cuPlatform() {}
+	virtual ~hipPlatform() {}
 
 	size_t getDeviceCount() const { return _devices.size(); }
 
@@ -194,90 +193,93 @@ public:
 		return n;
 	}
 
-	CUdevice getDevice(const size_t d) const { return _devices[d].device; }
+	hipDevice_t getDevice(const size_t d) const { return _devices[d].device; }
 };
 
 // device: owns the context, stream, NVRTC-compiled module, and drives kernels.
 // Counterpart of ocl.h::device.
-class cuDevice : cuObject
+class hipDevice : hipObject
 {
 private:
-	const CUdevice _device;
-#if defined(cu_debug)
+	const hipDevice_t _device;
+#if defined(hip_debug)
 	const size_t _d;
 #endif
 	bool _profile = false;
 	int _ccMajor = 0, _ccMinor = 0;
-	size_t _maxWorkGroupSize = 0;	// CU_DEVICE_ATTRIBUTE_MAX_THREADS_PER_BLOCK
-	size_t _localMemSize = 0;		// CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK
-	CUcontext _context = nullptr;
-	CUstream _stream = nullptr;
-	CUmodule _module = nullptr;
+	std::string _gcnArch;	// e.g. "gfx1030" / "gfx906" — the hipRTC compile target
+	size_t _maxWorkGroupSize = 0;	// hipDeviceAttributeMaxThreadsPerBlock
+	size_t _localMemSize = 0;		// hipDeviceAttributeMaxSharedMemoryPerBlock
+	hipCtx_t _context = nullptr;
+	hipStream_t _stream = nullptr;
+	hipModule_t _module = nullptr;
 
 	struct profile
 	{
 		std::string name;
 		size_t count;
-		double time;	// milliseconds (cuEventElapsedTime)
+		double time;	// milliseconds (hipEventElapsedTime)
 
 		profile() {}
 		profile(const std::string & name) : name(name), count(0), time(0) {}
 	};
-	std::map<CUfunction, profile> _profileMap;
-	std::vector<cu_kernel_t *> _ownedKernels;	// for cleanup
+	std::map<hipFunction_t, profile> _profileMap;
+	std::vector<hip_kernel_t *> _ownedKernels;	// for cleanup
 
 public:
-	cuDevice(const cuPlatform & parent, const size_t d, const bool verbose) : _device(parent.getDevice(d))
-#if defined(cu_debug)
+	hipDevice(const hipPlatform & parent, const size_t d, const bool verbose) : _device(parent.getDevice(d))
+#if defined(hip_debug)
 		, _d(d)
 #endif
 	{
-		char deviceName[256]; cuFatal(cuDeviceGetName(deviceName, sizeof(deviceName), _device));
-		cuFatal(cuDeviceGetAttribute(&_ccMajor, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, _device));
-		cuFatal(cuDeviceGetAttribute(&_ccMinor, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, _device));
+		char deviceName[256]; hipFatal(hipDeviceGetName(deviceName, sizeof(deviceName), _device));
+		hipFatal(hipDeviceGetAttribute(&_ccMajor, hipDeviceAttributeComputeCapabilityMajor, _device));
+		hipFatal(hipDeviceGetAttribute(&_ccMinor, hipDeviceAttributeComputeCapabilityMinor, _device));
+		{ hipDeviceProp_t prop; hipFatal(hipGetDeviceProperties(&prop, _device)); _gcnArch = prop.gcnArchName;
+		  const size_t c = _gcnArch.find(':'); if (c != std::string::npos) _gcnArch = _gcnArch.substr(0, c); }	// strip :xnack-/:sramecc+
 
-		int mwgs = 0; cuFatal(cuDeviceGetAttribute(&mwgs, CU_DEVICE_ATTRIBUTE_MAX_THREADS_PER_BLOCK, _device));
+		int mwgs = 0; hipFatal(hipDeviceGetAttribute(&mwgs, hipDeviceAttributeMaxThreadsPerBlock, _device));
 		_maxWorkGroupSize = size_t(mwgs);
-		int lms = 0; cuFatal(cuDeviceGetAttribute(&lms, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK, _device));
+		int lms = 0; hipFatal(hipDeviceGetAttribute(&lms, hipDeviceAttributeMaxSharedMemoryPerBlock, _device));
 		_localMemSize = size_t(lms);
 
-		int driverVersion = 0; cuDriverGetVersion(&driverVersion);
+		int driverVersion = 0; hipDriverGetVersion(&driverVersion);
 
 		if (verbose)
 		{
-			int computeUnits = 0; cuDeviceGetAttribute(&computeUnits, CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT, _device);
-			int clockRate = 0; cuDeviceGetAttribute(&clockRate, CU_DEVICE_ATTRIBUTE_CLOCK_RATE, _device);	// kHz
-			size_t totalMem = 0; cuDeviceTotalMem(&totalMem, _device);
+			int computeUnits = 0; hipDeviceGetAttribute(&computeUnits, hipDeviceAttributeMultiprocessorCount, _device);
+			int clockRate = 0; hipDeviceGetAttribute(&clockRate, hipDeviceAttributeClockRate, _device);	// kHz
+			size_t totalMem = 0; hipDeviceTotalMem(&totalMem, _device);
 			std::ostringstream ssd;
-			ssd << "Running on device '" << deviceName << "', vendor 'NVIDIA Corporation', sm_" << _ccMajor << _ccMinor
-				<< ", driver " << driverVersion / 1000 << "." << (driverVersion % 1000) / 10
-				<< ", " << computeUnits << " SMs @ " << clockRate / 1000 << "MHz, mem=" << (totalMem >> 20) << "MB"
+			ssd << "Running on device '" << deviceName << "', vendor 'AMD', " << _gcnArch
+				<< ", driver " << driverVersion
+				<< ", " << computeUnits << " CUs @ " << clockRate / 1000 << "MHz, mem=" << (totalMem >> 20) << "MB"
 				<< ", maxThreadsPerBlock=" << _maxWorkGroupSize << ", sharedMem/block=" << (_localMemSize >> 10) << "kB.";
 			pio::print(ssd.str());
 		}
 
-		cuFatal(cuDevicePrimaryCtxRetain(&_context, _device));
-		cuFatal(cuCtxSetCurrent(_context));
+		hipFatal(hipDevicePrimaryCtxRetain(&_context, _device));
+		hipFatal(hipCtxSetCurrent(_context));
 		// Non-blocking stream: ALL work (kernels AND host<->device copies via the *Async
 		// variants below) runs on this one stream, so it stays in-order like OpenCL's queue,
 		// AND it can be stream-captured into a CUDA graph (capture forbids a blocking stream
 		// that implicitly syncs with the legacy default stream). Copies must use the Async
-		// forms on _stream — a plain cuMemcpyHtoD/DtoH would run on stream 0 and race us.
-		cuFatal(cuStreamCreate(&_stream, CU_STREAM_NON_BLOCKING));
+		// forms on _stream — a plain hipMemcpyHtoD/DtoH would run on stream 0 and race us.
+		hipFatal(hipStreamCreateWithFlags(&_stream, hipStreamNonBlocking));
 	}
 
-	virtual ~cuDevice()
+	virtual ~hipDevice()
 	{
-		if (_module != nullptr) cuModuleUnload(_module);
-		for (cu_kernel_t * k : _ownedKernels) delete k;
-		if (_stream != nullptr) cuStreamDestroy(_stream);
-		cuDevicePrimaryCtxRelease(_device);
+		if (_module != nullptr) hipModuleUnload(_module);
+		for (hip_kernel_t * k : _ownedKernels) delete k;
+		if (_stream != nullptr) hipStreamDestroy(_stream);
+		hipDevicePrimaryCtxRelease(_device);
 	}
 
 public:
 	size_t getMaxWorkGroupSize() const { return _maxWorkGroupSize; }
 	size_t getLocalMemSize() const { return _localMemSize; }
-	size_t getTimerResolution() const { return 1; }	// cuEventElapsedTime resolves ~0.5us; value unused on CUDA
+	size_t getTimerResolution() const { return 1; }	// hipEventElapsedTime resolves ~0.5us; value unused on CUDA
 	bool isIntel() const { return false; }
 
 public:
@@ -365,142 +367,120 @@ public:
 	}
 
 public:
-	void loadProgram(const std::string & programSrc, const void * fatbinData = nullptr, size_t fatbinSize = 0)
+	void loadProgram(const std::string & programSrc)
 	{
-		// AOT path: load precompiled SASS (a fatbin built offline by nvcc) instead of NVRTC-compiling at
-		// runtime. cuModuleLoadData auto-detects fatbin/cubin/PTX; the driver picks the matching SASS, so
-		// there's no PTX-JIT and no toolkit-vs-driver coupling. Order:
-		//   1. GENEFER_LOAD_CUBIN=<file>  (diagnostic override)
-		//   2. embedded per-(n,RNS) fatbin baked into this binary (the shipped self-contained path)
-		//   3. NVRTC fallback (no embed, or this config's fatbin is missing)
-		if (const char * cf = std::getenv("GENEFER_LOAD_CUBIN"))
-		{
-			std::ifstream f(cf, std::ios::binary | std::ios::ate);
-			const std::streamsize sz = f.tellg(); f.seekg(0);
-			std::vector<char> img(static_cast<size_t>(sz)); f.read(img.data(), sz);
-			cuFatal(cuModuleLoadData(&_module, img.data()));
-			return;
-		}
-		if ((fatbinData != nullptr) && (fatbinSize > 0)) { cuFatal(cuModuleLoadData(&_module, fatbinData)); return; }
+		hiprtcProgram prog;
+		hiprtcFatal(hiprtcCreateProgram(&prog, programSrc.c_str(), "genefer.cu", 0, nullptr, nullptr));
 
-#if defined(GENEFER_EMBED_FATBINS)
-		// Embedded build: every shipped (n,RNS) config has a baked-in fatbin, so there is NO NVRTC at all
-		// (the binary needs only the driver). Reaching here means a config without an embedded fatbin.
-		(void)programSrc;
-		throw std::runtime_error("no embedded fatbin for this (n, RNS, is32) config");
-#else
-		nvrtcProgram prog;
-		nvrtcFatal(nvrtcCreateProgram(&prog, programSrc.c_str(), "genefer.cu", 0, nullptr, nullptr));
-
-		// New GPUs (e.g. Blackwell sm_120) can trigger NVRTC/JIT codegen bugs. GENEFER_NVRTC_ARCH lets
-		// you target a lower, mature virtual arch (e.g. compute_90) and let the driver JIT to the real
-		// GPU, which often sidesteps a native-arch miscompile. Default = the device's own capability.
-		std::ostringstream archOpt;
-		if (const char * a = std::getenv("GENEFER_NVRTC_ARCH")) archOpt << "--gpu-architecture=" << a;
-		else archOpt << "--gpu-architecture=compute_" << _ccMajor << _ccMinor;
+		std::ostringstream archOpt; archOpt << "--gpu-architecture=" << _gcnArch;
 		const std::string arch = archOpt.str();
 		std::vector<const char *> options;
 		options.push_back(arch.c_str());
 		options.push_back("--std=c++14");
-#if defined(cu_debug)
+		// The kernel type-puns uint_32* twiddle arrays as uint2_32*/uint4_32* (DECLARE_W*); keep
+		// strict aliasing off (as OpenCL effectively does) so those vector loads stay well-defined.
+		options.push_back("-fno-strict-aliasing");
+		options.push_back("-fwrapv");	// defined signed-overflow (clang exploits the UB; NVRTC does not)
+		// NOTE on correctness: ROCm clang's loop unroller (-O2+) miscompiles the square/mul NTT
+		// helpers when the vector operands are __align__ STRUCTS (uint2_32/uint4_32) -> the residue
+		// diverges after a few squarings. cuda/kernel.cu therefore defines those types as clang
+		// ext_vector_type natives under __HIP__ (the same uint2/uint4 OpenCL uses), which compile
+		// correctly AND ~2x faster. So no -fno-unroll-loops is needed here; full -O3 is bit-exact.
+		// Diagnostic escape hatches (unset by default): force -O0, or inject an extra flag
+		// (e.g. GENEFER_HIPRTC_OPT=-O1) to re-bisect if a future toolchain regresses.
+		if (std::getenv("GENEFER_HIPRTC_O0") != nullptr) options.push_back("-O0");
+		static std::string optFlag;
+		if (const char * o = std::getenv("GENEFER_HIPRTC_OPT")) { optFlag = o; options.push_back(optFlag.c_str()); }
+#if defined(hip_debug)
 		options.push_back("--generate-line-info");
 #endif
-		const nvrtcResult cres = nvrtcCompileProgram(prog, int(options.size()), options.data());
+		const hiprtcResult cres = hiprtcCompileProgram(prog, int(options.size()), options.data());
 
-		size_t logSize = 0; nvrtcGetProgramLogSize(prog, &logSize);
+		size_t logSize = 0; hiprtcGetProgramLogSize(prog, &logSize);
 		if (logSize > 1)
 		{
 			std::vector<char> log(logSize);
-			nvrtcGetProgramLog(prog, log.data());
-#if defined(cu_debug)
+			hiprtcGetProgramLog(prog, log.data());
+#if defined(hip_debug)
 			std::ofstream fileOut("pgm.log"); fileOut << log.data() << std::endl; fileOut.close();
 #else
-			if (cres != NVRTC_SUCCESS) { std::ostringstream ss; ss << log.data() << std::endl; pio::print(ss.str()); }
+			if (cres != HIPRTC_SUCCESS) { std::ostringstream ss; ss << log.data() << std::endl; pio::print(ss.str()); }
 #endif
 		}
-		nvrtcFatal(cres, "compile");
+		hiprtcFatal(cres, "compile");
 
-		size_t ptxSize = 0; nvrtcFatal(nvrtcGetPTXSize(prog, &ptxSize));
+		size_t ptxSize = 0; hiprtcFatal(hiprtcGetCodeSize(prog, &ptxSize));
 		std::vector<char> ptx(ptxSize);
-		nvrtcFatal(nvrtcGetPTX(prog, ptx.data()));
-		nvrtcFatal(nvrtcDestroyProgram(&prog));
+		hiprtcFatal(hiprtcGetCode(prog, ptx.data()));
+		hiprtcFatal(hiprtcDestroyProgram(&prog));
 
-#if defined(cu_debug)
+#if defined(hip_debug)
 		std::ofstream fileOut("pgm.ptx", std::ios::binary); fileOut.write(ptx.data(), std::streamsize(ptxSize)); fileOut.close();
 #endif
-		// GENEFER_JIT_O0 lowers the driver's PTX->SASS optimization (CU_JIT_OPTIMIZATION_LEVEL=0) — a
-		// diagnostic for opt-level-dependent JIT miscompiles on new architectures (cf. the HIP -O0 case).
-		if (std::getenv("GENEFER_JIT_O0") != nullptr)
-		{
-			CUjit_option jopt[1] = { CU_JIT_OPTIMIZATION_LEVEL };
-			void * jval[1] = { reinterpret_cast<void *>(uintptr_t(0)) };
-			cuFatal(cuModuleLoadDataEx(&_module, ptx.data(), 1, jopt, jval));
-		}
-		else cuFatal(cuModuleLoadDataEx(&_module, ptx.data(), 0, nullptr, nullptr));
-#endif
+		hipFatal(hipModuleLoadDataEx(&_module, ptx.data(), 0, nullptr, nullptr));
 	}
 
 	void clearProgram()
 	{
-		if (_module != nullptr) { cuFatal(cuModuleUnload(_module)); _module = nullptr; }
-		for (cu_kernel_t * k : _ownedKernels) delete k;
+		if (_module != nullptr) { hipFatal(hipModuleUnload(_module)); _module = nullptr; }
+		for (hip_kernel_t * k : _ownedKernels) delete k;
 		_ownedKernels.clear();
 		_profileMap.clear();
 	}
 
 private:
-	void _sync() { cuFatal(cuStreamSynchronize(_stream)); }
+	void _sync() { hipFatal(hipStreamSynchronize(_stream)); }
 
 protected:
-	cu_mem _createBuffer(const unsigned /*flags*/, const size_t size, const bool clear = true) const
+	hip_mem _createBuffer(const unsigned /*flags*/, const size_t size, const bool clear = true) const
 	{
-		CUdeviceptr mem = 0;
-		cuFatal(cuMemAlloc(&mem, size));
-		if (clear) cuFatal(cuMemsetD8(mem, 0, size));
+		hipDeviceptr_t mem = 0;
+		hipFatal(hipMalloc(&mem, size));
+		if (clear) hipFatal(hipMemsetD8(mem, 0, size));
 		return mem;
 	}
 
-	static void _releaseBuffer(cu_mem & mem)
+	static void _releaseBuffer(hip_mem & mem)
 	{
-		if (mem != 0) { cuFatal(cuMemFree(mem)); mem = 0; }
+		if (mem != 0) { hipFatal(hipFree(mem)); mem = 0; }
 	}
 
-	void _readBuffer(cu_mem & mem, void * const ptr, const size_t size, const size_t offset = 0)
+	void _readBuffer(hip_mem & mem, void * const ptr, const size_t size, const size_t offset = 0)
 	{
 		// Prefill with random bytes so a silent read failure is caught (mirrors ocl.h).
 		char * const cptr = static_cast<char *>(ptr);
 		for (size_t i = 0; i < size; ++i) cptr[i] = static_cast<char>(std::rand());
 		_sync();	// wait for queued kernels/graph launches to finish writing `mem`
-		cuFatal(cuMemcpyDtoHAsync(ptr, mem + offset, size, _stream));
+		hipFatal(hipMemcpyDtoHAsync(ptr, static_cast<char *>(mem) + offset, size, _stream));
 		_sync();	// wait for the copy (host buffer is consumed by the caller)
 	}
 
-	void _writeBuffer(cu_mem & mem, const void * const ptr, const size_t size, const size_t offset = 0)
+	void _writeBuffer(hip_mem & mem, const void * const ptr, const size_t size, const size_t offset = 0)
 	{
 		_sync();	// order after prior stream work
-		cuFatal(cuMemcpyHtoDAsync(mem + offset, ptr, size, _stream));
+		hipFatal(hipMemcpyHtoDAsync(static_cast<char *>(mem) + offset, ptr, size, _stream));
 		_sync();	// wait for the copy (host source may be freed by the caller)
 	}
 
 protected:
-	cu_kernel _createKernel(const char * const kernelName)
+	hip_kernel _createKernel(const char * const kernelName)
 	{
-		cu_kernel_t * kernel = new cu_kernel_t();
+		hip_kernel_t * kernel = new hip_kernel_t();
 		kernel->name = kernelName;
-		cuFatal(cuModuleGetFunction(&kernel->function, _module, kernelName), kernelName);
+		hipFatal(hipModuleGetFunction(&kernel->function, _module, kernelName), kernelName);
 		_ownedKernels.push_back(kernel);
 		_profileMap[kernel->function] = profile(kernelName);
 		return kernel;
 	}
 
-	static void _releaseKernel(cu_kernel & kernel)
+	static void _releaseKernel(hip_kernel & kernel)
 	{
-		// CUfunction lifetime is tied to the module; just forget the handle here.
-		// The cu_kernel_t object itself is freed in clearProgram()/destructor.
+		// hipFunction_t lifetime is tied to the module; just forget the handle here.
+		// The hip_kernel_t object itself is freed in clearProgram()/destructor.
 		kernel = nullptr;
 	}
 
-	static void _setKernelArg(cu_kernel kernel, const unsigned arg_index, const size_t arg_size, const void * const arg_value)
+	static void _setKernelArg(hip_kernel kernel, const unsigned arg_index, const size_t arg_size, const void * const arg_value)
 	{
 		std::memcpy(kernel->argData[arg_index].data(), arg_value, arg_size);
 		kernel->argSize[arg_index] = arg_size;
@@ -508,7 +488,7 @@ protected:
 	}
 
 protected:
-	void _executeKernel(cu_kernel kernel, const size_t globalWorkSize, const size_t localWorkSize = 0)
+	void _executeKernel(hip_kernel kernel, const size_t globalWorkSize, const size_t localWorkSize = 0)
 	{
 		size_t block = localWorkSize;
 		if (block == 0)
@@ -527,24 +507,24 @@ protected:
 		}
 		const size_t grid = globalWorkSize / block;
 
-		void * args[cu_kernel_t::max_args];
+		void * args[hip_kernel_t::max_args];
 		for (size_t i = 0; i < kernel->argCount; ++i) args[i] = kernel->argData[i].data();
 
 		if (!_profile)
 		{
-			cuFatal(cuLaunchKernel(kernel->function, unsigned(grid), 1, 1, unsigned(block), 1, 1, 0, _stream, args, nullptr));
+			hipFatal(hipModuleLaunchKernel(kernel->function, unsigned(grid), 1, 1, unsigned(block), 1, 1, 0, _stream, args, nullptr));
 		}
 		else
 		{
-			CUevent start, stop;
-			cuFatal(cuEventCreate(&start, CU_EVENT_DEFAULT));
-			cuFatal(cuEventCreate(&stop, CU_EVENT_DEFAULT));
-			cuFatal(cuEventRecord(start, _stream));
-			cuFatal(cuLaunchKernel(kernel->function, unsigned(grid), 1, 1, unsigned(block), 1, 1, 0, _stream, args, nullptr));
-			cuFatal(cuEventRecord(stop, _stream));
-			cuFatal(cuEventSynchronize(stop));
-			float ms = 0; cuEventElapsedTime(&ms, start, stop);
-			cuEventDestroy(start); cuEventDestroy(stop);
+			hipEvent_t start, stop;
+			hipFatal(hipEventCreateWithFlags(&start, hipEventDefault));
+			hipFatal(hipEventCreateWithFlags(&stop, hipEventDefault));
+			hipFatal(hipEventRecord(start, _stream));
+			hipFatal(hipModuleLaunchKernel(kernel->function, unsigned(grid), 1, 1, unsigned(block), 1, 1, 0, _stream, args, nullptr));
+			hipFatal(hipEventRecord(stop, _stream));
+			hipFatal(hipEventSynchronize(stop));
+			float ms = 0; hipEventElapsedTime(&ms, start, stop);
+			hipEventDestroy(start); hipEventDestroy(stop);
 
 			profile & prof = _profileMap[kernel->function];
 			prof.count++;
@@ -560,17 +540,17 @@ protected:
 	// replaying a graph removes the per-launch CPU/driver overhead of millions of squarings.
 	// Requires the capture region to contain only stream work (no host<->device sync); the
 	// squaring loop is pure kernel launches, so this holds. _profile must be false during capture.
-	void beginCapture() { cuFatal(cuStreamBeginCapture(_stream, CU_STREAM_CAPTURE_MODE_THREAD_LOCAL)); }
+	void beginCapture() { hipFatal(hipStreamBeginCapture(_stream, hipStreamCaptureModeThreadLocal)); }
 
-	CUgraphExec endCapture()
+	hipGraphExec_t endCapture()
 	{
-		CUgraph graph; cuFatal(cuStreamEndCapture(_stream, &graph));
-		CUgraphExec exec; cuFatal(cuGraphInstantiate(&exec, graph, 0));
-		cuGraphDestroy(graph);
+		hipGraph_t graph; hipFatal(hipStreamEndCapture(_stream, &graph));
+		hipGraphExec_t exec; hipFatal(hipGraphInstantiate(&exec, graph, nullptr, nullptr, 0));	// HIP uses the 5-arg form
+		hipGraphDestroy(graph);
 		return exec;
 	}
 
-	void launchGraph(CUgraphExec exec) { cuFatal(cuGraphLaunch(exec, _stream)); }
+	void launchGraph(hipGraphExec_t exec) { hipFatal(hipGraphLaunch(exec, _stream)); }
 
-	static void destroyGraph(CUgraphExec & exec) { if (exec != nullptr) { cuGraphExecDestroy(exec); exec = nullptr; } }
+	static void destroyGraph(hipGraphExec_t & exec) { if (exec != nullptr) { hipGraphExecDestroy(exec); exec = nullptr; } }
 };

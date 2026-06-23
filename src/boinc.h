@@ -9,8 +9,8 @@ Please give feedback to the authors if improvement is realized. It is distribute
 
 #if defined(BOINC)
 #include "boinc_api.h"
-#if !defined(CUDA)
-#include "boinc_opencl.h"	// OpenCL backend only; the CUDA backend uses aid.gpu_device_num
+#if !defined(CUDA) && !defined(HIP)
+#include "boinc_opencl.h"	// OpenCL backend only; CUDA/HIP backends use aid.gpu_device_num
 #endif
 #else
 

@@ -42,7 +42,9 @@ static const char * const src_cuda_kernel = \
 "// ---------------------------------------------------------------------------\n" \
 "\n" \
 "#define INLINE		__device__ __forceinline__ static\n" \
-"#define PTX_ASM		1\n" \
+"#if !defined(__HIP__)\n" \
+"#define PTX_ASM		1	// NVIDIA inline-PTX carry chains (CUDA); HIP uses the portable C fallback\n" \
+"#endif\n" \
 "\n" \
 "typedef unsigned int		sz_t;\n" \
 "typedef unsigned int		uint_32;\n" \
@@ -52,17 +54,29 @@ static const char * const src_cuda_kernel = \
 "\n" \
 "#define mul_hi(x, y)	__umulhi((x), (y))\n" \
 "\n" \
-"// __align__ so the compiler emits coalesced vector loads/stores (one 64/128-bit access)\n" \
-"// instead of 2-4 scalar accesses, matching OpenCL's native uint2/uint4 vectorization.\n" \
+"#if defined(__HIP__)\n" \
+"// On HIP use clang's native ext_vector types (the same uint2/uint4/int4/long4 that OpenCL uses):\n" \
+"// they expose .s0..s3 / .s01 swizzles, compile to packed dwordx2/x4/long4 loads, AND unroll\n" \
+"// correctly. ROCm clang's loop unroller MISCOMPILES the __align__ struct form below (the square\n" \
+"// NTT diverges after a few squarings); native vectors avoid the bug and are ~2x faster.\n" \
+"typedef uint_32 uint2_32 __attribute__((ext_vector_type(2)));\n" \
+"typedef uint_32 uint4_32 __attribute__((ext_vector_type(4)));\n" \
+"typedef int_32  int4_32  __attribute__((ext_vector_type(4)));\n" \
+"typedef int_64  int4_64  __attribute__((ext_vector_type(4)));\n" \
+"#else\n" \
+"// CUDA/NVRTC: __align__ structs so NVCC emits coalesced 64/128-bit loads/stores. (NVRTC does not\n" \
+"// support ext_vector_type and does not have the unroller bug, so the struct form is correct there.)\n" \
 "struct __align__(8)  uint2_32 { uint_32 s0, s1; };\n" \
 "struct __align__(16) uint4_32 { uint_32 s0, s1, s2, s3; };\n" \
 "struct __align__(16) int4_32  { int_32  s0, s1, s2, s3; };\n" \
 "struct __align__(16) int4_64  { int_64  s0, s1, s2, s3; };\n" \
+"#endif\n" \
 "\n" \
-"INLINE uint2_32 make_uint2_32(const uint_32 s0, const uint_32 s1) { uint2_32 r; r.s0 = s0; r.s1 = s1; return r; }\n" \
-"INLINE uint4_32 make_uint4_32(const uint_32 s0, const uint_32 s1, const uint_32 s2, const uint_32 s3) { uint4_32 r; r.s0 = s0; r.s1 = s1; r.s2 = s2; r.s3 = s3; return r; }\n" \
-"INLINE int4_32 make_int4_32(const int_32 s0, const int_32 s1, const int_32 s2, const int_32 s3) { int4_32 r; r.s0 = s0; r.s1 = s1; r.s2 = s2; r.s3 = s3; return r; }\n" \
-"INLINE int4_64 make_int4_64(const int_64 s0, const int_64 s1, const int_64 s2, const int_64 s3) { int4_64 r; r.s0 = s0; r.s1 = s1; r.s2 = s2; r.s3 = s3; return r; }\n" \
+"// Brace-init is valid for both the aggregate structs (CUDA) and the ext_vector types (HIP).\n" \
+"INLINE uint2_32 make_uint2_32(const uint_32 s0, const uint_32 s1) { uint2_32 r = { s0, s1 }; return r; }\n" \
+"INLINE uint4_32 make_uint4_32(const uint_32 s0, const uint_32 s1, const uint_32 s2, const uint_32 s3) { uint4_32 r = { s0, s1, s2, s3 }; return r; }\n" \
+"INLINE int4_32 make_int4_32(const int_32 s0, const int_32 s1, const int_32 s2, const int_32 s3) { int4_32 r = { s0, s1, s2, s3 }; return r; }\n" \
+"INLINE int4_64 make_int4_64(const int_64 s0, const int_64 s1, const int_64 s2, const int_64 s3) { int4_64 r = { s0, s1, s2, s3 }; return r; }\n" \
 "\n" \
 "// ---------------------------------------------------------------------------\n" \
 "// Default config (overridden by the #define block injected at runtime)\n" \

@@ -1,0 +1,21 @@
+=== compute_120 square2048: the suspect mul.lo.s64 mulmod (PTX) ===
+  (w loaded as v2.u32, packed to 64-bit via mov.b64, w.s1 = (u64)>>32,
+   then lhs*(u64)w.s1 becomes cvt.u64.u32 + MUL.LO.S64 + extract{lo,hi})
+	ld.global.nc.v2.u32 	{%r1086, %r1087}, [%rd96+131072];
+	mov.b64 	%rd97, {%r1086, %r1087};
+	shr.u64 	%rd98, %rd97, 32;
+	cvt.u64.u32 	%rd120, %r1154;
+	mul.lo.s64 	%rd121, %rd98, %rd120;
+	cvt.u32.u64 	%r1308, %rd121;
+	{ .reg .b32 tmp; mov.b64 {tmp, %r1309}, %rd121; }
+
+=== compute_89 square2048: the SAME mulmod is ONE mul.wide.u32 (reg,reg) ===
+	mul.wide.u32 	%rd18, %r32, %r24;   // lhs * (uint64)rhs  -- ONE instruction, both 32-bit
+
+SUMMARY: identical arithmetic, different lowering.
+  compute_89 : 1x mul.wide.u32
+  compute_120: cvt.u64.u32 + mul.lo.s64 (+ lo/hi extraction)  <-- wrong on sm_120 hw
+
+Whole-module counts (CUDA 12.9, nvcc -ptx):
+  compute_89 : mul.lo.s64=0   mul.wide.u32=3982  mov.b64=0
+  compute_120: mul.lo.s64=56  mul.wide.u32=3977  mov.b64=3620
