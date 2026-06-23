@@ -270,9 +270,11 @@ private:
 	gpu_kernel _forward64_0 = nullptr, _forward64_9 = nullptr, _forward64_11 = nullptr;
 	gpu_kernel _backward64_0 = nullptr, _backward64_9 = nullptr, _backward64_11 = nullptr;
 	gpu_kernel _forward256_0 = nullptr, _backward256_0 = nullptr, _forward1024_0 = nullptr, _backward1024_0 = nullptr;
+	// OPT-15: generic runtime-lm forward256/backward256 are needed by the production radix-split ladders (ln 22/23).
+	gpu_kernel _forward256 = nullptr, _backward256 = nullptr;
 #if defined(TUNE)
-	gpu_kernel _forward64 = nullptr, _forward256 = nullptr, _forward1024 = nullptr;
-	gpu_kernel _backward64 = nullptr, _backward256 = nullptr, _backward1024 = nullptr;
+	gpu_kernel _forward64 = nullptr, _forward1024 = nullptr;
+	gpu_kernel _backward64 = nullptr, _backward1024 = nullptr;
 #endif
 	gpu_kernel _square32 = nullptr, _square64 = nullptr, _square128 = nullptr, _square256 = nullptr;
 	gpu_kernel _square512 = nullptr, _square1024 = nullptr, _square2048 = nullptr, _square4096 = nullptr;
@@ -416,11 +418,20 @@ public:
 		CREATE_TRANSFORM_KERNEL(backward256_0);
 		CREATE_TRANSFORM_KERNEL(forward1024_0);
 		CREATE_TRANSFORM_KERNEL(backward1024_0);
+		// OPT-15 (LEAN): generic runtime-lm forward256/backward256 are used ONLY by the ln 22/23 production
+		// ladders, and ALL_FUNC (hence these kernel symbols) is emitted into the fatbin ONLY for n==22/23.
+		// Register them only for those configs so createKernels() never asks cuModuleGetFunction() for a symbol
+		// that isn't compiled in (other configs leave _forward256/_backward256 null; releaseKernels() no-ops on null).
+#if !defined(TUNE)
+		if (_ln == 22 || _ln == 23)
+#endif
+		{
+			CREATE_TRANSFORM_KERNEL(forward256);
+			CREATE_TRANSFORM_KERNEL(backward256);
+		}
 #if defined(TUNE)
 		CREATE_TRANSFORM_KERNEL(forward64);
 		CREATE_TRANSFORM_KERNEL(backward64);
-		CREATE_TRANSFORM_KERNEL(forward256);
-		CREATE_TRANSFORM_KERNEL(backward256);
 		CREATE_TRANSFORM_KERNEL(forward1024);
 		CREATE_TRANSFORM_KERNEL(backward1024);
 #endif
@@ -484,9 +495,11 @@ public:
 		_releaseKernel(_forward64_0); _releaseKernel(_forward64_9); _releaseKernel(_forward64_11);
 		_releaseKernel(_backward64_0); _releaseKernel(_backward64_9); _releaseKernel(_backward64_11);
 		_releaseKernel(_forward256_0); _releaseKernel(_backward256_0); _releaseKernel(_forward1024_0); _releaseKernel(_backward1024_0);
+		// OPT-15: generic runtime-lm forward256/backward256 (ln 22/23 production ladders).
+		_releaseKernel(_forward256); _releaseKernel(_backward256);
 #if defined(TUNE)
-		_releaseKernel(_forward64); _releaseKernel(_forward256); _releaseKernel(_forward1024);
-		_releaseKernel(_backward64); _releaseKernel(_backward256); _releaseKernel(_backward1024);
+		_releaseKernel(_forward64); _releaseKernel(_forward1024);
+		_releaseKernel(_backward64); _releaseKernel(_backward1024);
 #endif
 		_releaseKernel(_square32); _releaseKernel(_square64); _releaseKernel(_square128); _releaseKernel(_square256);
 		_releaseKernel(_square512); _releaseKernel(_square1024); _releaseKernel(_square2048); _releaseKernel(_square4096);
@@ -559,11 +572,12 @@ private:
 	DEFINE_BACKWARDn(256, 0);
 	DEFINE_FORWARDn(1024, 0);
 	DEFINE_BACKWARDn(1024, 0);
+	// OPT-15: generic runtime-lm forward256/backward256 host wrappers, used by ln 22/23 production ladders.
+	DEFINE_FORWARD(256);
+	DEFINE_BACKWARD(256);
 #if defined(TUNE)
 	DEFINE_FORWARD(64);
 	DEFINE_BACKWARD(64);
-	DEFINE_FORWARD(256);
-	DEFINE_BACKWARD(256);
 	DEFINE_FORWARD(1024);
 	DEFINE_BACKWARD(1024);
 #endif
@@ -608,9 +622,10 @@ private:
 	DEFINE_FORWARDPn(64, 11);
 	DEFINE_FORWARDPn(256, 0);
 	DEFINE_FORWARDPn(1024, 0);
+	// OPT-15: generic runtime-lm forward256p multiplicand wrapper, used by ln 22/23 production ladders.
+	DEFINE_FORWARDP(256);
 #if defined(TUNE)
 	DEFINE_FORWARDP(64);
-	DEFINE_FORWARDP(256);
 	DEFINE_FORWARDP(1024);
 #endif
 
@@ -733,7 +748,10 @@ public:
 		else if (ln == 19) { forward256_0(); square2048(); backward256_0(); }
 		else if (ln == 20) { forward256_0(); square4096(); backward256_0(); }
 		else if (ln == 21) { forward64_0(); forward64_9(); square512(); backward64_9(); backward64_0(); }
-		else if (ln == 22) { forward1024_0(); square4096(); backward1024_0(); }
+		// OPT-15: V100 autotuner radix splits (confirmed bit-exact + faster than the hardcoded baselines).
+		// ln==22: 64 x 256 x 256  (partition {6,8,8}); ln==23: 256 x 256 x 128 (partition {8,8,7}).
+		else if (ln == 22) { forward64_0(); forward256(8); square256(); backward256(8); backward64_0(); }
+		else if (ln == 23) { forward256_0(); forward256(7); square128(); backward256(7); backward256_0(); }
 		else { forward64_0(); forward64_11(); square2048(); backward64_11(); backward64_0(); }
 #endif
 	}
@@ -755,7 +773,9 @@ public:
 		else if (ln == 19) { forward256_0(); mul2048(); backward256_0(); }
 		else if (ln == 20) { forward256_0(); mul4096(); backward256_0(); }
 		else if (ln == 21) { forward64_0(); forward64_9(); mul512(); backward64_9(); backward64_0(); }
-		else if (ln == 22) { forward1024_0(); mul4096(); backward1024_0(); }
+		// OPT-15: match the square() radix splits for ln 22/23 (the forward/backward ladder must be identical).
+		else if (ln == 22) { forward64_0(); forward256(8); mul256(); backward256(8); backward64_0(); }
+		else if (ln == 23) { forward256_0(); forward256(7); mul128(); backward256(7); backward256_0(); }
 		else { forward64_0(); forward64_11(); mul2048(); backward64_11(); backward64_0(); }
 #endif
 	}
@@ -839,7 +859,9 @@ public:
 		else if (lm == 19) { forward256p_0(); fwd2048p(); }
 		else if (lm == 20) { forward256p_0(); fwd4096p(); }
 		else if (lm == 21) { forward64p_0(); forward64p_9(); fwd512p(); }
-		else if (lm == 22) { forward1024p_0(); fwd4096p(); }
+		// OPT-15: mirror the square()/mul() forward ladders for ln 22/23 so the multiplicand layout matches _z.
+		else if (lm == 22) { forward64p_0(); forward256p(8); fwd256p(); }
+		else if (lm == 23) { forward256p_0(); forward256p(7); fwd128p(); }
 		else { forward64p_0(); forward64p_11(); fwd2048p(); }
 #endif
 	}
@@ -1107,8 +1129,15 @@ public:
 #if defined(CHECK_RADIX4_FUNCTIONS)
 		src << "#define SHORT_FUNC\t" << 1 << std::endl;
 #endif
+	// OPT-15 (LEAN): only the production ln 22/23 ladders call the generic runtime-lm forward256/backward256
+	// kernels, which the kernel source guards behind ALL_FUNC. Emit ALL_FUNC ONLY for those two configs so the
+	// other 30 configs do not compile the ~18 generic kernels into their fatbin (binary stays ~376MB). createKernels()
+	// registers forward256/backward256 under the same n==22/23 gate, so emitted == registered per config (no
+	// cuModuleGetFunction crash). TUNE builds still get ALL_FUNC for every size (the autotuner walks all splits).
 #if defined(TUNE)
 		src << "#define ALL_FUNC\t" << 1 << std::endl;
+#else
+		if (n == 22 || n == 23) src << "#define ALL_FUNC\t" << 1 << std::endl;
 #endif
 
 		src << "#define NORM_WG_SZ\t" << _pEngine->getNormWGsize() << std::endl;
