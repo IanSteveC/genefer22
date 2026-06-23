@@ -125,6 +125,10 @@ divergent codegen persists on CUDA 12.9 **and** 13.2. The trigger is `cuda/kerne
 (`mulmod`), reached via the `uint2`/`uint4` scalar-broadcast overloads. Full analysis,
 SASS/PTX evidence, a reproducer, and an NVIDIA bug report are under `nvidia_bug/`.
 
+This is **confirmed on real hardware**: the rebuilt fatbin (Blackwell SASS via `compute_89`)
+computes correctly on an RTX 5070 (`sm_120`), on the same GPU where the native `compute_120`
+fatbin fails the `-h` self-test — both AOT, identical packaging, only the virtual arch differs.
+
 ### File layout
 
 | File | Role |
@@ -153,12 +157,11 @@ SASS/PTX evidence, a reproducer, and an NVIDIA bug report are under `nvidia_bug/
 
 - Done: bit-exact CUDA backend, dual/tri build, CUDA Graphs + alignment (faster than
   OpenCL), per-GPU `TUNE` autotuner (builds + bit-exact), **AOT multi-arch fatbin build**
-  (driver-only, no NVRTC in the shipped binary), **Blackwell `compute_89` workaround**,
-  BOINC build (verified against BOINC 8.3.0).
-- Pending: confirm the Blackwell fatbin on real `sm_120` hardware (the workaround SASS comes
-  from the `compute_89` path an RTX 5070 already validated via arch override); run-test under
-  a live BOINC client (GPU assignment) + server-side app version; Windows makefile (CUDA has
-  no macOS).
+  (driver-only, no NVRTC in the shipped binary), **Blackwell `compute_89` workaround
+  (confirmed on an RTX 5070 — the AOT fatbin computes correctly on `sm_120`)**, BOINC
+  build (verified against BOINC 8.3.0).
+- Pending: run-test under a live BOINC client (GPU assignment) + server-side app version;
+  Windows makefile (CUDA has no macOS).
 - Investigated and declined (not worth the risk on this algorithm): Shoup modmul (~1 SASS
   slot), normalize→backward fusion (blocked — backward writes strided FFT output, the base-b
   carry needs contiguous order), on-the-fly twiddles (complicated by bit-reversed root storage).

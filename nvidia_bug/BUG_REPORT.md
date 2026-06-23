@@ -327,13 +327,13 @@ may be substituted for `sm_120` as appropriate for the target.)
 | n=16 passes, n=17 reports "test failed!" (wrong residue) | **Observed on reporter's RTX 5070** (driver 13.0); failing binary is AOT fatbin SASS, no JIT |
 | Same wrong result also seen via NVRTC (CUDA 12.9) | **Observed on reporter's RTX 5070** |
 | Same problem sizes pass on V100 (`sm_70`) | **Observed** (reporter) |
-| `compute_89`-built kernel is CORRECT on the same Blackwell GPU; `compute_120`-built is WRONG | **Observed on reporter's RTX 5070** (arch override) |
+| `compute_89`-built kernel is CORRECT on the same Blackwell GPU; `compute_120`-built is WRONG | **Confirmed on reporter's RTX 5070** — the shipped AOT fatbin whose `sm_120f` SASS is built via `compute_89` passes the self-test on the 5070, on the same GPU where the native `compute_120` fatbin fails (both AOT, identical packaging; only the virtual arch differs) |
 | cicc emits `mul.lo.s64`+`cvt` (6 in square2048 body, 56 module-wide) on `compute_120` vs `mul.wide.u32` (0 `mul.lo.s64`) on `compute_89`, identical source | **Statically verified on dev box** (sm_70 V100), CUDA 12.9 and 13.2 |
 | The six rewritten operands are provably zero-upper-32 (so the rewrite is arithmetically equivalent on paper) | **Statically verified on dev box** |
 | SASS modular-reduction core is selection-identical between builds; only the index/address multiply path diverges; no SASS instruction wrong on its face | **Statically verified on dev box** |
 | ptxas lowering/scheduling of the `compute_120` register-multiplier index path is the leading candidate for the actual miscompile | **Hypothesis** — consistent with static evidence + reporter's runtime symptom; NOT proven |
 | Minimal standalone kernel reproduces the wrong RESULT | **NOT reproduced** — minimal kernel does not even reproduce the codegen asymmetry; ptxas recovers `IMAD.WIDE.U32` for it on the dev box |
-| On-device A/B harness (`check_on_blackwell.sh --full`) showing differing hashes on `sm_120` | **PENDING Blackwell hardware** — not run; dev box is V100 |
+| On-device A/B: `compute_89` fatbin correct vs `compute_120` fatbin wrong on the same `sm_120` | **Confirmed on reporter's RTX 5070** via the full genefer self-test (authoritative). The single-block `check_on_blackwell.sh --full` harness was not separately run (analyst dev box is a V100) |
 
 ### Honesty caveat
 
@@ -342,7 +342,9 @@ on Blackwell by the analyst, and no SASS instruction was found that is wrong on
 its face. All divergent PTX and SASS forms are arithmetically equivalent on
 paper. The wrong **result** is real and reproducible **on the reporter's RTX 5070
 via the full genefer self-test**, and it tracks the `compute_120` codegen path
-exactly (flipping to `compute_89` fixes it on the same GPU). What we ask NVIDIA to
+exactly: the shipped AOT fatbin built via `compute_89` **passes** on the same 5070
+where the native `compute_120` fatbin **fails** — an A/B on identical hardware and
+packaging in which only the virtual architecture differs. What we ask NVIDIA to
 confirm is which stage actually miscomputes — our leading hypothesis is ptxas's
 lowering/scheduling of the `mul.lo.s64`-derived index path that only the
 `compute_120` cicc output produces.
