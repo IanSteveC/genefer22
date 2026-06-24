@@ -143,6 +143,7 @@ fatbin fails the `-h` self-test — both AOT, identical packaging, only the virt
 | `src/cuda/kernel.h` | `cuda/kernel.cu` embedded as a C++ string (used by the NVRTC fallback / source dump) |
 | `src/transform.h`, `src/genefer.h`, `src/main.cpp` | shared; small `#if defined(CUDA)` device-selection branches |
 | `genefer/makefile_linux_x64` | legacy `cuda:` target (NVRTC variant, `-lnvrtc`) |
+| `dev/genefer-mps-sweep.sh` | CUDA MPS concurrency sweep — aggregate throughput vs (N × concurrency × SM-%) |
 
 ## Correctness notes
 
@@ -152,6 +153,40 @@ fatbin fails the `-h` self-test — both AOT, identical packaging, only the virt
   in-order like OpenCL's queue, and stream-capturable for graphs.
 - `localWorkSize==0` (OpenCL driver-chosen) launches pick the largest power-of-two ≤256
   dividing the global size (those kernels have no bounds guard).
+
+## Concurrent tasks via CUDA MPS
+
+A single genefer task leaves the GPU heavily underutilised at small/mid GFN sizes
+(the transform does not fill all SMs). Running several tasks at once through **CUDA
+MPS** (Multi-Process Service) recovers that idle capacity. `dev/genefer-mps-sweep.sh`
+finds the best setting per size, sweeping concurrency × MPS active-thread-% (the
+fraction of SMs each task may use):
+
+```
+GENEFER=build_dev/genefercu N_LIST="16 20 23" CONCURRENCY="1 2 4" \
+  MPS_PCT="40 70 100" ./dev/genefer-mps-sweep.sh
+```
+
+It starts a private MPS server, verifies a client can run, then launches C tasks at
+a time (each capped to P% SMs), reports `effective ms/bit = mean(per-task) / C` and
+the gain vs one solo task, writes a CSV, and tears everything down on exit. All
+settings are in a config block at the top of the script.
+
+**Tesla V100 findings** (aggregate-throughput gain vs a single task, `-b 1000000`):
+
+| GFN size | best config | gain vs solo |
+|---|---|---|
+| n=16 | C=6 @ 40% | +64% |
+| n=17 | C=6 @ 50% | +40% |
+| n=18 | C=4 @ 60% | +25% |
+| n=19–22 | C=4 @ 40% | +7 … +13% |
+| n=23 | C=3 @ 80% | +2% |
+
+The win is large for small N (idle GPU) and decays toward the bandwidth-bound sizes.
+General rule: **run ~4 tasks throttled to ~40% SMs** — partition the GPU once rather
+than oversubscribing it (4 tasks at 100% thrashes and loses). Combined with the
+single-task CUDA lead over OpenCL (~3–12%), an MPS-tuned V100 does roughly 1.1–1.6×
+the aggregate work of a single OpenCL task, depending on size.
 
 ## Status / next steps
 
