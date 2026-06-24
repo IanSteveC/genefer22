@@ -423,7 +423,7 @@ public:
 		// Register them only for those configs so createKernels() never asks cuModuleGetFunction() for a symbol
 		// that isn't compiled in (other configs leave _forward256/_backward256 null; releaseKernels() no-ops on null).
 #if !defined(TUNE)
-		if (_ln == 22 || _ln == 23)
+		if (_ln == 21 || _ln == 22 || _ln == 23)
 #endif
 		{
 			CREATE_TRANSFORM_KERNEL(forward256);
@@ -744,10 +744,11 @@ public:
 		else if (ln == 15) { forward64_0(); square512(); backward64_0(); }
 		else if (ln == 16) { forward64_0(); square1024(); backward64_0(); }
 		else if (ln == 17) { forward64_0(); square2048(); backward64_0(); }
-		else if (ln == 18) { forward256_0(); square1024(); backward256_0(); }
+		else if (ln == 18) { forward64_0(); square4096(); backward64_0(); }	// SMALLN-03B: 6+12 via 8-warp square4096
 		else if (ln == 19) { forward256_0(); square2048(); backward256_0(); }
 		else if (ln == 20) { forward256_0(); square4096(); backward256_0(); }
-		else if (ln == 21) { forward64_0(); forward64_9(); square512(); backward64_9(); backward64_0(); }
+		// SMALLN-21: 6+8+7 (square128) — measured ~2.5% faster than the original 6+6+9 (square512), bit-exact.
+		else if (ln == 21) { forward64_0(); forward256(7); square128(); backward256(7); backward64_0(); }
 		// OPT-15: V100 autotuner radix splits (confirmed bit-exact + faster than the hardcoded baselines).
 		// ln==22: 64 x 256 x 256  (partition {6,8,8}); ln==23: 256 x 256 x 128 (partition {8,8,7}).
 		else if (ln == 22) { forward64_0(); forward256(8); square256(); backward256(8); backward64_0(); }
@@ -769,10 +770,10 @@ public:
 		else if (ln == 15) { forward64_0(); mul512(); backward64_0(); }
 		else if (ln == 16) { forward64_0(); mul1024(); backward64_0(); }
 		else if (ln == 17) { forward64_0(); mul2048(); backward64_0(); }
-		else if (ln == 18) { forward256_0(); mul1024(); backward256_0(); }
+		else if (ln == 18) { forward64_0(); mul4096(); backward64_0(); }	// SMALLN-03B
 		else if (ln == 19) { forward256_0(); mul2048(); backward256_0(); }
 		else if (ln == 20) { forward256_0(); mul4096(); backward256_0(); }
-		else if (ln == 21) { forward64_0(); forward64_9(); mul512(); backward64_9(); backward64_0(); }
+		else if (ln == 21) { forward64_0(); forward256(7); mul128(); backward256(7); backward64_0(); }	// SMALLN-21: 6+8+7
 		// OPT-15: match the square() radix splits for ln 22/23 (the forward/backward ladder must be identical).
 		else if (ln == 22) { forward64_0(); forward256(8); mul256(); backward256(8); backward64_0(); }
 		else if (ln == 23) { forward256_0(); forward256(7); mul128(); backward256(7); backward256_0(); }
@@ -855,10 +856,10 @@ public:
 		else if (lm == 15) { forward64p_0(); fwd512p(); }
 		else if (lm == 16) { forward64p_0(); fwd1024p(); }
 		else if (lm == 17) { forward64p_0(); fwd2048p(); }
-		else if (lm == 18) { forward256p_0(); fwd1024p(); }
+		else if (lm == 18) { forward64p_0(); fwd4096p(); }	// SMALLN-03B
 		else if (lm == 19) { forward256p_0(); fwd2048p(); }
 		else if (lm == 20) { forward256p_0(); fwd4096p(); }
-		else if (lm == 21) { forward64p_0(); forward64p_9(); fwd512p(); }
+		else if (lm == 21) { forward64p_0(); forward256p(7); fwd128p(); }	// SMALLN-21: 6+8+7
 		// OPT-15: mirror the square()/mul() forward ladders for ln 22/23 so the multiplicand layout matches _z.
 		else if (lm == 22) { forward64p_0(); forward256p(8); fwd256p(); }
 		else if (lm == 23) { forward256p_0(); forward256p(7); fwd128p(); }
@@ -1137,7 +1138,7 @@ public:
 #if defined(TUNE)
 		src << "#define ALL_FUNC\t" << 1 << std::endl;
 #else
-		if (n == 22 || n == 23) src << "#define ALL_FUNC\t" << 1 << std::endl;
+		if (n == 21 || n == 22 || n == 23) src << "#define ALL_FUNC\t" << 1 << std::endl;	// +21: SMALLN-21 search
 #endif
 
 		src << "#define NORM_WG_SZ\t" << _pEngine->getNormWGsize() << std::endl;
