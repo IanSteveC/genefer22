@@ -8,7 +8,10 @@
 # once (each capped to P% of the SMs) and reports the AGGREGATE throughput:
 #
 #     effective ms/bit = mean(per-task ms/bit) / C          (lower = better)
-#     gain%            = improvement of "effective" vs ONE solo task (C=1)
+#     speedup          = solo_ms_per_bit / effective         (throughput ratio, e.g. 2.4x)
+#     gain%            = (speedup - 1) * 100   = how much MORE aggregate work/sec than
+#                        ONE solo task. NOTE this is the throughput ratio, not a time cut:
+#                        a 2.4x speedup is +144%, not +59%.
 #
 # gain% > 0 means C concurrent tasks do more total work/sec than a single task
 # would — i.e. the GPU was underutilized solo and MPS filled it. This is biggest
@@ -130,23 +133,25 @@ run_cfg(){
 mkdir -p "$WORKDIR"
 { echo "# genefer MPS sweep  $(date)"
   echo "# GPU=${GPU:-?}  binary=$NAME  base=$BASE"
-  echo "# effective = mean(per-task ms/bit)/C ; gain_pct vs solo (C=1,P=100)"
-  echo "N,C,P,per_task_ms,n_ok,effective,solo,gain_pct"
+  echo "# effective=mean(per-task ms/bit)/C ; speedup=solo/effective ; gain_pct=(speedup-1)*100"
+  echo "N,C,P,per_task_ms,n_ok,effective,solo,gain_pct,speedup"
 } > "$OUTFILE"
 
 for N in $N_LIST; do
   read -r solo nb < <(run_cfg "$N" 1 100)
-  echo "$N,1,100,$solo,$nb,$solo,$solo,0.0" >> "$OUTFILE"
+  echo "$N,1,100,$solo,$nb,$solo,$solo,0.0,1.00" >> "$OUTFILE"
   printf "\n== N=%s ==  solo baseline = %s ms/bit\n" "$N" "$solo"
   for C in $CONCURRENCY; do
     [ "$C" -le 1 ] && continue
     for P in $MPS_PCT; do
       read -r ms nok < <(run_cfg "$N" "$C" "$P")
       eff=$(awk -v m="$ms" -v c="$C" 'BEGIN{printf "%.6f", m/c}')
-      gain=$(awk -v s="$solo" -v e="$eff" 'BEGIN{ if(s>0) printf "%.1f",(s-e)/s*100; else print "0" }')
-      echo "$N,$C,$P,$ms,$nok,$eff,$solo,$gain" >> "$OUTFILE"
+      # gain% = throughput speedup ratio: how much MORE aggregate work/sec than one solo task
+      gain=$(awk -v s="$solo" -v e="$eff" 'BEGIN{ if(e>0) printf "%.1f",(s/e-1)*100; else print "0" }')
+      spd=$(awk  -v s="$solo" -v e="$eff" 'BEGIN{ if(e>0) printf "%.2f",s/e;       else print "0" }')
+      echo "$N,$C,$P,$ms,$nok,$eff,$solo,$gain,$spd" >> "$OUTFILE"
       warn=""; [ "${nok:-0}" -lt "$C" ] && warn="  (! only $nok/$C tasks reported)"
-      printf "  C=%s P=%3s%%   per-task=%-9s eff=%-9s gain=%+6s%%%s\n" "$C" "$P" "$ms" "$eff" "$gain" "$warn"
+      printf "  C=%s P=%3s%%   per-task=%-9s eff=%-9s  %sx faster (+%s%%)%s\n" "$C" "$P" "$ms" "$eff" "$spd" "$gain" "$warn"
     done
   done
 done
@@ -154,17 +159,17 @@ done
 # --------- summary to terminal ----------
 echo ""
 echo "================================  SUMMARY  ================================"
-echo "(gain% = aggregate-throughput improvement of C concurrent tasks vs 1 solo)"
+echo "(speedup = solo/effective throughput ratio ; gain% = (speedup-1)*100)"
 awk -F, 'NR>4 {
   n=$1+0; g=$8+0
   if($2==1){ if(!(n in seen)){seen[n]=1; ord[++m]=n}; solo[n]=$6; next }
-  if(!(n in bg) || g>bg[n]){ bg[n]=g; bc[n]=$2; bp[n]=$3; be[n]=$6 }
+  if(!(n in bg) || g>bg[n]){ bg[n]=g; bc[n]=$2; bp[n]=$3; be[n]=$6; bs[n]=$9 }
 }
 END{
-  printf "  %-4s %-13s %-16s %-12s %s\n","N","solo ms/bit","best config","eff ms/bit","gain"
-  printf "  %-4s %-13s %-16s %-12s %s\n","---","-----------","-----------","----------","----"
+  printf "  %-4s %-13s %-16s %-12s %-9s %s\n","N","solo ms/bit","best config","eff ms/bit","speedup","gain"
+  printf "  %-4s %-13s %-16s %-12s %-9s %s\n","---","-----------","-----------","----------","-------","----"
   for(i=1;i<=m;i++){ n=ord[i]
-    if(n in bg) printf "  %-4s %-13s C=%s @ P=%-4s    %-12s +%.1f%%\n", n, solo[n], bc[n], bp[n]"%", be[n], bg[n]
+    if(n in bg) printf "  %-4s %-13s C=%s @ P=%-4s    %-12s %-9s +%.1f%%\n", n, solo[n], bc[n], bp[n]"%", be[n], bs[n]"x", bg[n]
     else        printf "  %-4s %-13s (no concurrency tested)\n", n, solo[n]
   }
 }' "$OUTFILE"

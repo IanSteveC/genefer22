@@ -168,24 +168,25 @@ GENEFER=build_dev/genefercu N_LIST="16 20 23" CONCURRENCY="1 2 4" \
 ```
 
 It starts a private MPS server, verifies a client can run, then launches C tasks at
-a time (each capped to P% SMs), reports `effective ms/bit = mean(per-task) / C` and
-the gain vs one solo task, writes a CSV, and tears everything down on exit. All
-settings are in a config block at the top of the script.
+a time (each capped to P% SMs), reports `effective ms/bit = mean(per-task) / C`, the
+`speedup = solo/effective` and `gain% = (speedup-1)*100` (the throughput ratio — a
+2.4× speedup is +144%), writes a CSV, and tears everything down on exit. All settings
+are in a config block at the top of the script.
 
-**Tesla V100 findings** (aggregate-throughput gain vs a single task, `-b 1000000`):
+**Tesla V100 findings** (aggregate-throughput speedup vs a single task, `-b 1000000`):
 
-| GFN size | best config | gain vs solo |
+| GFN size | best config | speedup vs solo |
 |---|---|---|
-| n=16 | C=6 @ 40% | +64% |
-| n=17 | C=6 @ 50% | +40% |
-| n=18 | C=4 @ 60% | +25% |
-| n=19–22 | C=4 @ 40% | +7 … +13% |
-| n=23 | C=3 @ 80% | +2% |
+| n=16 | C=6 @ 40% | **2.8×** (+180%) |
+| n=17 | C=6 @ 50% | 1.7× (+68%) |
+| n=18 | C=4 @ 60% | 1.3× (+34%) |
+| n=19–22 | C=4 @ 40% | 1.08–1.15× (+8 … +15%) |
+| n=23 | C=3 @ 80% | 1.02× (+2%) |
 
 The win is large for small N (idle GPU) and decays toward the bandwidth-bound sizes.
 General rule: **run ~4 tasks throttled to ~40% SMs** — partition the GPU once rather
 than oversubscribing it (4 tasks at 100% thrashes and loses). Combined with the
-single-task CUDA lead over OpenCL (~3–12%), an MPS-tuned V100 does roughly 1.1–1.6×
+single-task CUDA lead over OpenCL (~3–14%), an MPS-tuned V100 does roughly **1.1–2.4×**
 the aggregate work of a single OpenCL task, depending on size.
 
 ## Status / next steps
