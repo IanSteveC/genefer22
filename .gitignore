@@ -1,0 +1,4 @@
+# Windows cross-build outputs (dev/build_win_cuda.sh)
+winlibs/
+bin/genefercu.exe
+genefercu-win-test.zip
